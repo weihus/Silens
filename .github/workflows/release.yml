@@ -22,7 +22,7 @@ jobs:
               libssl-dev
               libglib2.0-dev
               pkg-config
-            target: x86_64
+            target: ''
           - platform: macos-latest
             install: ''
             target: aarch64-apple-darwin
@@ -45,7 +45,10 @@ jobs:
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           rustup toolchain install stable --profile minimal --no-self-update
-          rustup target add --toolchain stable ${{ matrix.target }}
+          # only add cross targets; the host target ships with the stable toolchain
+          if [ -n "${{ matrix.target }}" ]; then
+            rustup target add --toolchain stable ${{ matrix.target }}
+          fi
           # make cargo/rustc visible to later steps (npx tauri build spawns them)
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
