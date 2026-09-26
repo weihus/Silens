@@ -1,6 +1,11 @@
 # Silens (息壤) 📝
 
-Silens 是一款基于 [Tauri](https://tauri.app/) 构建的极致极简、本地优先、零摩擦的沉浸式 Markdown 写作工具。应用秉承“启动即写、数据主权、拒绝干扰”的设计原则，为您提供“一期一会”般的专注写作体验。
+<div align=”center”>
+  <strong>语言 / Language</strong>：
+  <a href=”README.md”>简体中文</a> | <a href=”README.en.md”>English</a>
+</div>
+
+Silens 是一款基于 [Tauri](https://tauri.app/) 构建的极致极简、本地优先、零摩擦的沉浸式 Markdown 写作工具。应用秉承”启动即写、数据主权、拒绝干扰”的设计原则，为您提供”一期一会”般的专注写作体验。
 
 ## ✨ 项目简介
 
@@ -20,7 +25,7 @@ Silens 致力于提供无干扰的沉浸式写作空间。得益于 Tauri 的底
 - [ ] **云端 AI 管家 (Pro)**：后台静默语义拆解与结构化。
 - [x] **云盘工作区转移**：安全迁移工作区至 iCloud/OneDrive/Dropbox，享受云同步的便利，同时兼顾本地数据快照双重保险。
 
-## � 技术栈
+## 🧩 技术栈
 
 本项目采用了现代化的前后端分离架构，通过 Tauri IPC 进行高效通信：
 
@@ -111,7 +116,7 @@ npx tauri dev
 当您准备发布应用时，运行以下命令。Tauri 会自动构建前端产物，并将其与 Rust 后端编译为各平台原生的可执行文件（如 `.exe`, `.app`, `.dmg`, `.deb`）：
 
 ```bash
-npm run tauri build
+npx tauri build
 ```
 构建产物将输出在 `src-tauri/target/release/bundle/` 目录下。
 
