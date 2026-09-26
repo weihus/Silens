@@ -14,7 +14,6 @@ interface CanvasProps {
   knownTags: string[];
   targetSearchText: string | null;
   onConsumedTargetSearchText: () => void;
-  charCount: number;
   isSidebarOpen?: boolean;
 }
 
@@ -24,7 +23,7 @@ const themeStyles: Record<Theme, { backgroundColor: string; color: string; muted
   night: { backgroundColor: '#0D1424', color: '#E2E8F0', muted: '#64748B' },
 };
 
-export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, charCount, isSidebarOpen }: CanvasProps) {
+export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen }: CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ts = themeStyles[theme as Theme] ?? themeStyles.paper;
   const [scrollProgress, setScrollProgress] = useState(0);

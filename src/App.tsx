@@ -35,10 +35,6 @@ function todayKey() {
 }
 
 
-// 模块级单例：启动时预加载今日文档（含"今天"兜底新建逻辑），供区间浏览模式下
-// 主页无匹配日记时复用（loadDocument），而不是重新调 IPC load_document
-let preloadedToday: { content: string; filename: string } | null = null;
-
 function yesterdayKey() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
@@ -524,7 +520,6 @@ export default function App() {
           knownTags={knownTags}
           targetSearchText={targetSearchText}
           onConsumedTargetSearchText={() => setTargetSearchText(null)}
-          charCount={charCount}
         />
       </div>
 
