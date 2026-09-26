@@ -133,11 +133,14 @@ jobs:
           if [ -z "$(ls -A uploads/ 2>/dev/null)" ]; then
             echo "no artifacts to publish"; exit 1
           fi
+          # delete an existing release for this tag so re-runs are idempotent
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release delete "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" --notes "" --clobber \
-            --generate-notes \
-            $(ls uploads/*)
+            --title "${GITHUB_REF_NAME}" --notes "" \
+            uploads/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
