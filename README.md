@@ -1,8 +1,8 @@
 # Silens (息壤) 📝
 
-<div align=”center”>
+<div align="center">
   <strong>语言 / Language</strong>：
-  <a href=”README.md”>简体中文</a> | <a href=”README.en.md”>English</a>
+  <a href="README.md">简体中文</a> | <a href="README.en.md">English</a>
 </div>
 
 Silens 是一款基于 [Tauri](https://tauri.app/) 构建的极致极简、本地优先、零摩擦的沉浸式 Markdown 写作工具。应用秉承”启动即写、数据主权、拒绝干扰”的设计原则，为您提供”一期一会”般的专注写作体验。
