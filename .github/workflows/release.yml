@@ -14,9 +14,6 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-latest
-            args: >-
-              --bundle
-              deb,appimage
             install: >-
               sudo apt-get install -y
               libwebkit2gtk-4.1-dev
@@ -27,15 +24,9 @@ jobs:
               pkg-config
             target: x86_64
           - platform: macos-latest
-            args: >-
-              --bundle
-              dmg,app
             install: ''
             target: aarch64-apple-darwin
           - platform: windows-latest
-            args: >-
-              --bundle
-              msi,nsis
             install: ''
             target: x86_64-pc-windows-msvc
 
@@ -68,6 +59,6 @@ jobs:
         run: ${{ matrix.install }}
 
       - name: Build & release
-        run: npx tauri ${{ matrix.args }}
+        run: npx tauri build --ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
