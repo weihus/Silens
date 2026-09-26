@@ -68,8 +68,6 @@ jobs:
         run: ${{ matrix.install }}
 
       - name: Build & release
-        uses: tauri-apps/tauri-action@v0
+        run: npx tauri ${{ matrix.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: ${{ matrix.args }}
