@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(npx vitest *)",
+      "Bash(xxd)",
+      "Bash(perl *)",
+      "Bash(grep *)",
+      "Read(//private/tmp/**)",
+      "Bash(echo \"STATE: $\\(grep -E 'Running `target/debug/app`|error|panic|Missing' /tmp/tauri-dev5.log)"
+    ]
+  }
+}
