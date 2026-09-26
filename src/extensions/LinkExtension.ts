@@ -20,11 +20,11 @@ export const LinkExtension = Extension.create({
         },
         props: {
           decorations(state) {
-            return this.getState(state);
+            return (this as any).getState(state);
           },
           handleClick: (view, pos) => {
             const { state } = view;
-            const deco = this.getState(state);
+            const deco = (this as any).getState(state);
             const matches = deco.find(pos, pos);
             if (matches.length === 0) return false;
             const docName = matches[0].mark.attrs['data-doc-name'];

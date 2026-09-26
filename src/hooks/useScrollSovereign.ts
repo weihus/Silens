@@ -65,6 +65,7 @@ export function useScrollSovereign(editor: Editor | null, onModeChange?: (mode: 
   const ENFORCE_THRESHOLD = 4;
 
   const enforceAnchor = useCallback(() => {
+    if (!editor) return;
     const mode = stateRef.current.mode;
     if (mode !== 'writing') return;
 
@@ -147,10 +148,11 @@ export function useScrollSovereign(editor: Editor | null, onModeChange?: (mode: 
 
   /** Tell the controller a keystroke happened. Used by the typewriter hook. */
   const onKeystroke = useCallback(() => {
+    if (!editor) return;
     // If in edge_case (IME), wake up when user is at doc end
     if (stateRef.current.mode === 'edge_case') {
       try {
-        const { from, doc } = editor.state;
+        const { from, doc } = (editor.state as any);
         if (from >= doc.content.size - 20) {
           setMode('writing');
         }
@@ -169,7 +171,7 @@ export function useScrollSovereign(editor: Editor | null, onModeChange?: (mode: 
     // Resume if at doc end (creation mode) or 3+ keystrokes (rewrite mode)
     if (stateRef.current.mode === 'navigating') {
       try {
-        const { from, doc } = editor.state;
+        const { from, doc } = (editor.state as any);
         if (from >= doc.content.size - 20 || typingStreakRef.current >= 3) {
           setMode('writing');
         }
@@ -184,6 +186,7 @@ export function useScrollSovereign(editor: Editor | null, onModeChange?: (mode: 
    * Sets JUMPING mode, scrolls to position, then re-enables typewriter after settle.
    */
   const jumpToPosition = useCallback((pos: number) => {
+    if (!editor) return;
     const container = getContainer();
     if (!container) return;
 

@@ -38,10 +38,10 @@ export const ThreeSegmentDateInput: React.FC<{
 
   const handleFocus = (el: HTMLInputElement) => el.select();
 
-  const segs: [keyof PartialDate, number, (n?: number) => string][] = [
-    ['year', 4, yearEl],
-    ['month', 2, monthEl],
-    ['day', 2, dayEl],
+  const segs: [keyof PartialDate, (n?: number) => string][] = [
+    ['year', yearEl],
+    ['month', monthEl],
+    ['day', dayEl],
   ];
 
   return (
@@ -54,7 +54,7 @@ export const ThreeSegmentDateInput: React.FC<{
           {label}
         </span>
       )}
-      {segs.map(([key, len, fmt], i) => (
+      {segs.map(([key, fmt], i) => (
         <React.Fragment key={key}>
           {i > 0 && (
             <span className="opacity-30 text-[10px]" style={segStyle}>–</span>
