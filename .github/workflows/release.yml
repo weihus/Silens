@@ -63,7 +63,11 @@ jobs:
 
       - name: Rust platform install
         if: matrix.install != ''
-        run: ${{ matrix.install }}
+        shell: bash
+        run: |
+          # refresh apt index; runner's cached metadata points at 404 mirrors
+          sudo apt-get update
+          ${{ matrix.install }}
 
       - name: Build & release
         run: npx tauri build --ci
