@@ -1,3 +1,3 @@
-# Silens 用户手册 (User Manual)
+# Silens 用户手册
 
-欢迎使用 Silens，一款极致极简的沉浸式 Markdown 写作工具。Silens 旨在为您打造一个纯粹、无干扰的写作空间
+当前版本：v1.1.0。完整操作说明统一维护在项目根目录的 [使用手册](../../MANUAL.md)，版本变化见 [更新记录](../../CHANGELOG.md)。

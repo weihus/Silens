@@ -10,9 +10,11 @@ export function useGlobalShortcuts(
   _panelOpen: boolean,
   setPanelOpen: React.Dispatch<React.SetStateAction<boolean>>,
   toggleFocusMode: () => void,
+  blocked = false,
 ) {
   // Cmd/Ctrl + K: toggle palette
   useEffect(() => {
+    if (blocked) return;
     const down = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')) {
         e.preventDefault();
@@ -21,10 +23,11 @@ export function useGlobalShortcuts(
     };
     window.addEventListener('keydown', down, { capture: true });
     return () => window.removeEventListener('keydown', down, { capture: true });
-  }, [setPaletteOpen]);
+  }, [blocked, setPaletteOpen]);
 
   // Cmd/Ctrl + L: toggle sidebar
   useEffect(() => {
+    if (blocked) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'l' || e.code === 'KeyL')) {
         e.preventDefault();
@@ -37,10 +40,11 @@ export function useGlobalShortcuts(
     };
     window.addEventListener('keydown', handler, { capture: true });
     return () => window.removeEventListener('keydown', handler, { capture: true });
-  }, [sidebarPinned, setPaletteOpen, setSidebarOpen, setSidebarPinned]);
+  }, [blocked, sidebarPinned, setPaletteOpen, setSidebarOpen, setSidebarPinned]);
 
   // Cmd/Ctrl + Shift + M: toggle atmosphere panel
   useEffect(() => {
+    if (blocked) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === 'm' || e.code === 'KeyM')) {
         e.preventDefault();
@@ -50,10 +54,11 @@ export function useGlobalShortcuts(
     };
     window.addEventListener('keydown', handler, { capture: true });
     return () => window.removeEventListener('keydown', handler, { capture: true });
-  }, [setPaletteOpen, setPanelOpen]);
+  }, [blocked, setPaletteOpen, setPanelOpen]);
 
   // Cmd/Ctrl + Shift + F: toggle focus mode
   useEffect(() => {
+    if (blocked) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === 'f' || e.code === 'KeyF')) {
         e.preventDefault();
@@ -63,5 +68,5 @@ export function useGlobalShortcuts(
     };
     window.addEventListener('keydown', handler, { capture: true });
     return () => window.removeEventListener('keydown', handler, { capture: true });
-  }, [setPaletteOpen, toggleFocusMode]);
+  }, [blocked, setPaletteOpen, toggleFocusMode]);
 }

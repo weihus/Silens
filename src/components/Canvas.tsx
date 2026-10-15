@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import type { Theme } from '../types';
 import { MarkdownEditor } from './MarkdownEditor';
 import { Editor } from '@tiptap/react';
@@ -15,96 +15,61 @@ interface CanvasProps {
   targetSearchText: string | null;
   onConsumedTargetSearchText: () => void;
   isSidebarOpen?: boolean;
+  disabled?: boolean;
 }
 
-const themeStyles: Record<Theme, { backgroundColor: string; color: string; muted: string }> = {
-  paper: { backgroundColor: '#F4EAD5', color: '#2C2C2C', muted: '#8A8275' },
-  white: { backgroundColor: '#FFFFFF', color: '#111827', muted: '#9CA3AF' },
-  night: { backgroundColor: '#0D1424', color: '#E2E8F0', muted: '#64748B' },
-};
-
-export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen }: CanvasProps) {
+export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false }: CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const ts = themeStyles[theme as Theme] ?? themeStyles.paper;
-  const [scrollProgress, setScrollProgress] = useState(0);
-  const [isScrolling, setIsScrolling] = useState(false);
+  const progressRef = useRef<HTMLDivElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 组件卸载时清理定时器
-  useEffect(() => {
-    return () => {
-      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    };
+  useEffect(() => () => {
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
   }, []);
 
   return (
     <div
       ref={wrapperRef}
       id="silens-scroll-container"
-      className="fixed inset-0 w-screen h-screen overflow-y-auto overflow-x-hidden"
-      style={{
-        backgroundColor: 'transparent',
-        color: ts.color,
-        scrollbarWidth: 'none',
-        msOverflowStyle: 'none',
-        transition: 'color 0.8s ease, padding-left 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-        paddingLeft: isSidebarOpen ? '320px' : '0px',
-      }}
+      className={`canvas-scroll fixed inset-0 overflow-y-auto overflow-x-hidden ${isSidebarOpen ? 'canvas-sidebar-open' : ''}`}
+      aria-busy={disabled}
+      style={{ color: theme === 'night' ? '#E3E7E0' : '#343C38', scrollbarWidth: 'none' }}
       onMouseMove={onMouseMove}
       onScroll={(e) => {
-        const target = e.currentTarget;
-
-        // 计算当前的滚动进度比例 (0 ~ 1)
-        const { scrollTop, scrollHeight, clientHeight } = target;
-        const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
-        setScrollProgress(progress);
-
-        // 滚动反馈逻辑：滚动时变色，停止后 300ms 恢复
-        setIsScrolling(true);
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+        const progress = scrollHeight > clientHeight ? Math.max(0, Math.min(1, scrollTop / (scrollHeight - clientHeight))) : 0;
+        if (progressRef.current) {
+          progressRef.current.style.transform = `scaleY(${progress})`;
+          progressRef.current.style.backgroundColor = 'var(--theme-text)';
+        }
         if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
         scrollTimerRef.current = setTimeout(() => {
-          setIsScrolling(false);
+          if (progressRef.current) progressRef.current.style.backgroundColor = 'var(--theme-muted)';
         }, 300);
       }}
     >
-      <style>{`
-        div::-webkit-scrollbar {
-          display: none;
-        }
-      `}</style>
-
-      {/* Top spacer — natural content start */}
-      <div style={{ height: '96px', flexShrink: 0 }} />
-
-      <MarkdownEditor
-        theme={theme}
-        onChange={onChange}
-        onTyping={onTyping}
-        onEditorReady={onEditorReady}
-        isFocusMode={isFocusMode}
-        knownTags={knownTags}
-        targetSearchText={targetSearchText}
-        onConsumedTargetSearchText={onConsumedTargetSearchText}
-      />
-
-      {/* Bottom spacer so text can scroll past center */}
-      <div style={{ height: '80vh', flexShrink: 0 }} />
-
-      {/* 极简左侧阅读进度指示条 */}
-      <div
-        className={`fixed top-0 left-0 bottom-0 w-[2px] z-50 pointer-events-none transition-opacity duration-700 ${
-          uiVisible ? (theme === 'night' ? (isScrolling ? 'opacity-80' : 'opacity-40') : 'opacity-100') : 'opacity-0'
-        }`}
-      >
-        <div
-          className="w-full h-full origin-top transition-colors duration-300"
-          style={{
-            backgroundColor: isScrolling ? ts.color : ts.muted,
-            transform: `scaleY(${scrollProgress})`,
-          }}
+      <div className="canvas-writing-area" inert={disabled}>
+        <div className="h-24" />
+        <MarkdownEditor
+          theme={theme}
+          onChange={(value) => { if (!disabled) onChange(value); }}
+          onTyping={() => { if (!disabled) onTyping(); }}
+          onEditorReady={onEditorReady}
+          isFocusMode={isFocusMode}
+          knownTags={knownTags}
+          targetSearchText={disabled ? null : targetSearchText}
+          onConsumedTargetSearchText={onConsumedTargetSearchText}
         />
+        <div style={{ height: '80vh' }} />
       </div>
-
+      {disabled && (
+        <div className="canvas-loading fixed inset-0 z-40 flex items-center justify-center" style={{ backgroundColor: 'var(--theme-bg)', color: 'var(--theme-muted)' }}>
+          <span role="status" className="text-sm">加载中</span>
+        </div>
+      )}
+      <div aria-hidden="true" className={`fixed top-0 left-0 bottom-0 w-px z-50 pointer-events-none transition-opacity duration-300 ${uiVisible ? 'opacity-60' : 'opacity-0'}`}>
+        <div ref={progressRef} className="w-full h-full origin-top transition-colors duration-300" style={{ backgroundColor: 'var(--theme-muted)', transform: 'scaleY(0)' }} />
+      </div>
     </div>
   );
 }

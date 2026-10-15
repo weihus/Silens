@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 
 const FOCUS_DURATION_KEY = 'silens-focus-duration-v1';
 
-export function useFocusTimer() {
+export function useFocusTimer(soundEnabled = false, volume = 0.5) {
   const [focusDuration, setFocusDuration] = useState<number>(() => {
     const saved = localStorage.getItem(FOCUS_DURATION_KEY);
     return saved ? parseInt(saved, 10) : 25;
@@ -33,9 +33,9 @@ export function useFocusTimer() {
       setIsFocusMode(false);
       setFocusTimeLeft(null);
       setToast('专注结束，休息一下吧！');
-      playChime();
+      if (soundEnabled && volume > 0) playChime(volume);
     }
-  }, [isFocusMode, focusTimeLeft]);
+  }, [isFocusMode, focusTimeLeft, soundEnabled, volume]);
 
   const toggleFocusMode = useCallback(() => {
     setIsFocusMode((v: boolean) => {
@@ -54,7 +54,7 @@ export function useFocusTimer() {
   return { isFocusMode, focusTimeLeft, focusDuration, setFocusDuration, toggleFocusMode, toast, setToast };
 }
 
-function playChime() {
+function playChime(volume: number) {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContext) return;
@@ -66,8 +66,9 @@ function playChime() {
     osc.type = 'sine';
     osc.frequency.setValueAtTime(880, ctx.currentTime);
     gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    gainNode.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+    gainNode.gain.linearRampToValueAtTime(0.15 * volume, ctx.currentTime + 0.05);
     gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.5);
+    osc.onended = () => { void ctx.close(); };
     osc.start();
     osc.stop(ctx.currentTime + 2.5);
   } catch { /* silent */ }

@@ -1,88 +1,90 @@
-# Silens 📝
+# Silens
 
 <div align="center">
   <strong>语言 / Language</strong>：
   <a href="README.md">简体中文</a> | <a href="README.en.md">English</a>
 </div>
 
-Silens is an extremely minimal, local-first, zero-friction immersive Markdown writing tool built on [Tauri](https://tauri.app/). It follows the design principles of "open and write, data sovereignty, no distraction," giving you an "once-in-a-lifetime" focused writing experience.
+Silens is a local-first Markdown writing tool built on [Tauri](https://tauri.app/), with a warm paper palette and a gentle interface for focused writing.
 
-## ✨ About
+## v1.1.0
 
-Silens is a distraction-free writing space. Thanks to Tauri's low-level architecture, it has minimal memory usage and instant startup. All notes are saved as plain `.md` text in `Documents/Silens_Notes` on your machine, with no private metadata, no cloud dependency, and your privacy fully protected.
+This minor release focuses on dependable saving and a quieter writing experience while retaining the existing Markdown note format. See the [changelog](CHANGELOG.md) and [Chinese user manual](MANUAL.md).
 
-## 🛣️ Roadmap & Progress
+- Correct historical-note save targets, empty edits, and save ordering during navigation; preserve a draft copy before reloading external changes.
+- Verify snapshots before publishing, retain originals during workspace migration, and store indexes in app-local data.
+- Compact search with previews only when results exist; fix persistent empty-result notices, overlapping panels, and focus conflicts.
+- Warm paper and gray-green visual hierarchy, deliberate sidebar dismissal, and a gentle UI return after 2.2 seconds of inactivity.
+- Improve IME completion, Wiki links, blank lines in Markdown code blocks, exports, and Apple Silicon development launches under Rosetta.
 
-- [x] **Immersive editing & silent saving**: Start writing with no title; the UI fades as you type, and silently saves to `YYYY-MM-DD.md` after 1500ms of idle.
-- [x] **Stream-of-consciousness Ghost Tags & block parsing**: No colored blocks, no single-line truncation. Write freely with plain `#tags` — a single Enter continues, a **double Enter auto-splits** and archives the whole content block.
-- [x] **Ambient white-noise engine**: Rain, Fire, and Night soundscapes — no socializing background noise (e.g. cafés), only absolute solitude.
-- [x] **Physical spring typewriter & smart sleep**: A damped spring algorithm pushes the page up smoothly and locks it at 35% of the viewport while typing; it sleeps instantly when you scroll or use arrow keys to review.
-- [x] **Pin mode (two-pane)**: One-click lock on the timeline sidebar; the main editor glides over to yield a fluid two-pane workspace.
-- [x] **Shadow index & state swap**: A hidden SQLite index powers the sidebar; a single water-fog transition flips it into a global tag cloud.
-- [x] **Spotlight-grade global travel**: A floating glassmorphism command palette (Cmd+K) with rich "card preview" context; Enter travels precisely and triggers a "ghost highlight."
-- [x] **Silent safe backup**: Auto-snapshots on quit or every 6 hours, intelligently keeping the 10 most recent.
-- [x] **Bidirectional links**: Type `[[` for auto-complete across prefix, substring, and fuzzy strategies — jump instantly to any related note from your history.
-- [ ] **Cloud AI manager (Pro)**: Background semantic decomposition and structuring.
-- [x] **Cloud workspace transfer**: Safely move your workspace to iCloud / OneDrive / Dropbox, enjoying cloud sync while keeping a local snapshot as a double safety net.
+## About
 
-## 🧩 Tech Stack
+Notes are stored as plain `.md` files, by default in `Documents/Silens_Notes`. The SQLite index used for search and tags lives in the application's local data directory; private index metadata is not embedded in notes. Everyday writing does not require a cloud service, and there is currently no AI feature silently uploading notes. Sync software you choose may sync the notes folder, and `Documents` itself may be managed by services such as iCloud or OneDrive.
 
-A modern frontend/backend architecture communicating over Tauri IPC:
+## Roadmap & Progress
 
-- **Frontend (presentation)**: React 19 + TypeScript + Vite + Tailwind CSS
-  - **Editor**: TipTap (ProseMirror) for a seamless WYSIWYG Markdown experience.
-  - **State & interaction**: Native React state, Framer Motion animations, a Spotlight-style global command palette, and multi-format export via html2pdf.js / html-to-image.
-- **Backend (system layer)**: Rust + Tauri Core
-  - `std::fs` / `walkdir`: high-performance local file-system traversal and I/O.
-  - `serde` / `serde_json`: seamless serialization between Rust structs and frontend JSON.
-  - `rusqlite` (SQLite): a high-performance shadow index for millisecond-level structured queries while keeping `.md` data sovereignty.
+- [x] **Gentle interface**: Warm paper, white, and night themes, with system theme and reduced-motion preferences supported.
+- [x] **Editing & autosave**: Save to the current file after 1500ms of idle, including clearing an existing note; refuse overwrites when external changes are detected.
+- [x] **Tags, timeline & search**: Local indexing, tag browsing, contextual search previews, and explicit sidebar, pin, and search controls.
+- [x] **Focus & ambient sound**: Typewriter scrolling, a focus timer, and Rain, Fire, and Night soundscapes.
+- [x] **Wiki links**: `[[document]]` completion and forward navigation, with prefix, substring, and fuzzy matching.
+- [x] **Snapshots & workspace migration**: Publish backups after verification; copy and verify notes during migration while retaining originals.
+- [ ] **Backlinks**: Show which notes reference the current document.
+- [ ] **AI-assisted organization**: Future work only; processing or uploading notes must require explicit user opt-in.
 
-## 🚀 Core Features
+## Tech Stack
 
-### 1. The Zen Canvas
-- **No title, no-friction start**: Throw away the "new — name — write" flow. Open the app and the cursor is already blinking on today's blank page; time is your natural coordinate.
-- **Typing lock & the world retreating**: An extremely restrained interface. The moment you type, the cursor is forced invisible and the top logo, word count, and settings entry smoothly fade within 300ms — "start writing → the world retreats" into absolute silence. The world only reappears after 1000ms of stillness.
-- **Physical spring typewriter & intent-aware sleep**: In place of rigid centered scrolling, a physical spring keeps your line anchored at the golden 35% of the screen while writing. When you use the mouse or arrow keys to edit old text, the typewriter sleeps and never steals your view.
-- **Immersive fade & vignette**: A bottom gradient vignette that switches seamlessly with the day/night theme. While typing or scrolling, the word count, pomodoro, and other elements vanish; a second after you stop, they float back up like letters on still water.
-- **Atmosphere panel**: Invoked with `Cmd/Ctrl + Shift + M`, the settings panel uses an extremely restrained ghost-state, borderless design — no traditional form categories (no `THEME` / `SOUND` / `VOLUME` / `FOCUS` headers or dividers), just faint background blocks and opacity shifts to signal "inactive / hover / active." A hairline slider track with a discreet thumb, and export demoted to a borderless ghost button at the bottom that only reveals on hover. All of this keeps absolute immersion and visual order even while adjusting parameters.
+The frontend and backend communicate through Tauri IPC:
 
-### 2. Stream of Consciousness & Auto-Routing
-- **Invisible Markdown**: Traditional H1–H6 heading syntax that breaks your flow is dropped; only bold and italic remain. Combined with a 620px golden reading width, it forms a borderless timeline of time. A single Enter keeps lines tightly joined; a **double Enter creates a comfortable 48px–64px breathing gap**, perfectly matching the underlying "new content block" intuition.
-- **One page for everything, block-level tags**: No frequent page switching. On the same sheet, tag a work note `#todo` on one line and a film review `#movie` on the next. The system silently slices content by tag into independent blocks.
-- **The silent disk**: 1500ms after you stop typing, it writes to disk silently; each day auto-generates a `YYYY-MM-DD.md`. You just "pour"; the system "keeps" it.
-- **Timeline recap**: The sidebar abandons complex tree folders for a timeline waterfall of month/day that matches human intuition, with smooth expansion to review past records elegantly.
-- **Sidebar state swap**: Click the `#` marker at the top of the sidebar and the timeline dissolves like water vapor, flipping in place into a "global tag cloud directory." Click a tag to switch to a parallel timeline, with dynamic-height virtual scrolling and a draggable time scrubber.
-- **Pin mode (two-pane)**: While reviewing, click the sidebar "pin" and the main canvas glides right like a fluid to yield, becoming an efficient two-pane comparison workspace — no more anxiety about "mouse-out auto-close."
-- **The all-seeing eye & ghost travel (Spotlight & Ghost Highlight)**: `Cmd+K` summons a featherweight glassmorphism command palette with an original "card preview" two-column view for second-level search across your history. Enter travels instantly to an old canvas, and the target content fades in with a 1.5s "ghost highlight" so your thoughts never break.
-- **Fully automatic backup fortress**: A low-overhead resident guardian thread snapshots the whole workspace to `Silens_Backups` on exit or every 6 hours, intelligently pruning to the 10 most recent — enterprise-grade peace of mind.
+- **Frontend**: React 19, TypeScript, Vite, and Tailwind CSS; TipTap / ProseMirror and tiptap-markdown provide editing and Markdown serialization, with Framer Motion for animations.
+- **Backend**: Rust and Tauri; `std::fs` / `walkdir` handle files, `serde` / `serde_json` handle serialization, and `rusqlite` provides an app-local SQLite index.
 
-- **Cloud workspace transfer**: Safely move Silens's main workspace to a local iCloud Drive, OneDrive, or Dropbox folder. The system adapts to cloud sync for seamless cross-device writing, while all snapshot backups stay forced in local `Documents/Silens_Backups` — even if the cloud fails or goes offline, local data has a double safeguard.
+## Core Features
 
-### 3. Personal Sanctuary
-- **Built-in white-noise engine**: A high-quality Web Audio engine provides three restrained soundscapes — Rain, Fire, and Night — one click to isolate the outside world.
-- **Dictatorial typography**: No font or layout settings at all. The system forces the top native sans-serif font stack on macOS / Windows, welded to `19px` size, `1.9` line height, and `620px` width, using a low-contrast dark gray (`#2f3441`) — taking over your layout anxiety entirely.
-- **Graceful export**: Export to Markdown, plain text, or PNG/JPG, preserving the full layout.
+### 1. Writing & browsing
 
-### 4. Advanced: The Invisible Manager (AI) [🔥 Pro Preview]
-- **Free tier foundation**: A high-energy Rust regex engine aggregates your `#tag` blocks locally in milliseconds, generating structured waterfall recaps.
-- **AI semantic decomposition (planned)**: For untagged "pure stream-of-consciousness" text, a cloud AI manager silently decomposes it into todos, journal entries, and reading notes, and supports waking your second brain through "AI soul dialogue."
+- **Warm writing canvas**: A paper background, gray-green text and accents, subtle borders, and generous spacing. The interface fades while typing and respects the system reduced-motion preference.
+- **Explicit navigation**: The header shows the current note's date or filename, with a “Back to today” button when viewing older notes. Browse, search, and sidebar pinning have explicit buttons; key controls provide accessible names and visible keyboard focus.
+- **Markdown editing**: Imported or opened Markdown retains headings and code structure. Typing `# ` does not automatically create a heading. Bold, italic, lists, and `#tags` are supported, with local indexing for browsing content blocks.
+- **Timeline & search**: Browse by date or tag. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. `Cmd/Ctrl + K` opens compact search; context previews appear with results and are hidden on narrow windows. A pinned sidebar returns after search closes.
+- **Wiki links**: Type `[[` to select a note and click a link to open its target. These are forward links; a backlinks list is not yet implemented.
+- **Atmosphere & export**: Settings include themes, ambient sound, volume, focus duration, and local file actions. Export supports Markdown, plain text, PNG, and JPG.
 
-## ⌨️ Keyboard Shortcuts
+### 2. Saving, backups & recovery
 
-For maximum immersion and frictionless operation, Silens removes most traditional buttons in favor of highly efficient global shortcuts (mapped for both macOS and Windows/Linux):
+- **Keep the current filename**: Today's note uses `YYYY-MM-DD.md`; after opening an older note or another file, autosave writes back to that file. Clearing an existing note is saved too. A new page with no content does not create an empty file.
+- **Optimistic conflict checks**: Before saving, disk content is compared with the last loaded or saved content. Detected changes or deletion cause the overwrite to be refused. Writes use a temporary file followed by replacement; failures show an error and retain the text in the editor so you can export a copy. This is not a cross-process lock or concurrent-edit merge mechanism.
+- **Save and back up before closing**: Closing the window waits for pending saves, then creates a backup before closing. If saving or backup fails, the window stays open and displays an error.
+- **Local snapshots**: Snapshots are created every 6 hours while the app runs, before closing the window, or through the manual backup action. They are stored in `Documents/Silens_Backups`. Files are copied to a staging directory and verified before the snapshot is published. Successful publication triggers retention of the latest 10 snapshots; cleanup failures may leave more than 10. Failed copies or verification do not trigger removal of older backups.
+- **Manual recovery**: In the atmosphere panel, expand the local files section and choose the view-backups action to open the backup folder. Recovery requires manually selecting and copying files; there is no in-app restore interface.
 
-- **Global search travel (Spotlight)**: `Cmd / Ctrl` + `K`
-- **Summon / collapse timeline**: `Cmd / Ctrl` + `L`
-- **Toggle focus mode ("once-in-a-lifetime")**: `Cmd / Ctrl` + `Shift` + `F`
+### 3. Workspaces & cloud folders
+
+Workspace migration accepts a folder on your machine, including a local iCloud Drive, OneDrive, or Dropbox sync folder. Silens copies Markdown files into `Silens_Notes` at the destination, verifies the content, and rebuilds the local index before switching workspaces. Original files are retained. Existing destination files with different content cause migration to stop without overwriting them; identical files can be reused. A failed migration may leave files already copied to the destination.
+
+Third-party software handles cross-device synchronization. Silens does not guarantee detection or merging of concurrent edits. Backups remain in `Documents/Silens_Backups`, but `Documents` may itself be cloud-managed, so these snapshots are not guaranteed to be independent offline copies.
+
+### 4. AI roadmap
+
+Tag organization and search currently run locally. AI-assisted organization is not implemented. Any future cloud AI feature must require explicit opt-in and explain what it processes and uploads; it must not silently upload notes in the background by default.
+
+## Keyboard Shortcuts
+
+Shortcuts complement the visible controls:
+
+- **Global search (Spotlight)**: `Cmd / Ctrl` + `K`
+- **Open / collapse timeline**: `Cmd / Ctrl` + `L`
+- **Toggle focus mode**: `Cmd / Ctrl` + `Shift` + `F`
 - **Toggle atmosphere settings**: `Cmd / Ctrl` + `Shift` + `M`
 - **Undo**: `Cmd / Ctrl` + `Z`
 - **Redo**: `Cmd / Ctrl` + `Y` or `Shift` + `Cmd / Ctrl` + `Z`
 
-## 💻 Development & Build
+## Development & Build
 
 ### Prerequisites
 
 Make sure your environment has:
+
 - Node.js (LTS recommended)
 - Rust (via `rustup`)
 - Tauri platform dependencies (Windows: C++ Build Tools, macOS: Xcode, Linux: webkit2gtk, etc.)
@@ -100,15 +102,22 @@ npm install
 Start the frontend only, or the full Tauri desktop app:
 
 **Frontend only (web mode)**:
+
 ```bash
 npm run dev
 ```
 
 **Full desktop app (Tauri mode)**:
+
 ```bash
 npx tauri dev
 ```
+
 *The first run compiles Rust dependencies and may take a while; later builds use the cache and are much faster.*
+
+On macOS, `tauri.macos.conf.json` selects a native Cargo launcher. In an Apple Silicon Rosetta terminal it launches Cargo as arm64 to avoid `cc/xcrun` architecture mismatches. Frontend-only mode does not provide native file APIs; use Tauri mode for actual note operations.
+
+Checks: `npm run build`, `npx vitest run`, and `cargo test --manifest-path src-tauri/Cargo.toml`. In a Rosetta terminal, use `scripts/cargo-native.sh test --manifest-path src-tauri/Cargo.toml`.
 
 ### Build & release
 
@@ -117,9 +126,10 @@ When ready to ship, run the following. Tauri builds the frontend and compiles it
 ```bash
 npx tauri build
 ```
+
 Bundled output lands in `src-tauri/target/release/bundle/`.
 
-## 📁 Core Directory Structure
+## Core Directory Structure
 
 ```text
 Sliens/
@@ -133,10 +143,10 @@ Sliens/
 └── README.md               # Project documentation
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Issues and pull requests are welcome! Feel free to start a discussion about Markdown rendering or the local file-management approach.
 
-## 📄 License
+## License
 
 MIT License

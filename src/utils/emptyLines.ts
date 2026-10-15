@@ -14,12 +14,33 @@ const SENTINEL = ' ';
 /**
  * Encode: before saving to disk, strip sentinels and restore raw newlines.
  */
+function outsideCodeFences(text: string, transform: (value: string) => string): string {
+  const lines = text.split(/(?<=\n)/);
+  let fence: string | null = null;
+  let plain = '';
+  let result = '';
+  for (const line of lines) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*?)(?:\n)?$/);
+    if (!fence && marker) {
+      result += transform(plain) + line;
+      plain = '';
+      fence = marker[1];
+    } else if (fence) {
+      result += line;
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+    } else {
+      plain += line;
+    }
+  }
+  return result + transform(plain);
+}
+
 export function decodeEmptyLines(text: string): string {
-  return text
+  return outsideCodeFences(text, value => value
     .replace(/\n (?=\n)/g, '')
     .replace(/^ (?=\n)/g, '\n')
     .replace(/\n $/g, '\n')
-    .replace(/^ $/g, '\n\n\n');
+    .replace(/^ $/g, ''));
 }
 
 /**
@@ -28,10 +49,10 @@ export function decodeEmptyLines(text: string): string {
  */
 export function encodeEmptyLines(raw: string): string {
   const text = raw.replace(/\r\n/g, '\n');
-  return text.replace(/\n{3,}/g, (match) => {
+  return outsideCodeFences(text, value => value.replace(/\n{3,}/g, (match) => {
     const emptyParaCount = match.length - 2;
     return '\n\n' + Array(emptyParaCount).fill(SENTINEL).join('\n\n') + '\n\n';
-  });
+  }));
 }
 
 /**
@@ -39,7 +60,7 @@ export function encodeEmptyLines(raw: string): string {
  * When the document is empty, ensures cursor is at position 0 (not 1).
  */
 export function applyEncodedContent(editor: Editor, encoded: string) {
-  editor.commands.setContent(encoded);
+  editor.commands.setContent(encoded, { emitUpdate: false });
   editor.commands.command(({ tr }: { tr: any }) => {
     cleanSentinelParagraphs(tr);
     return true;
