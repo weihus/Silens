@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open as openFolderDialog } from '@tauri-apps/plugin-dialog';
+import { MotionConfig } from 'framer-motion';
 import { Canvas } from './components/Canvas';
 import { CommandPalette } from './components/CommandPalette';
 import { AtmospherePanel } from './components/AtmospherePanel';
@@ -7,22 +10,21 @@ import { ExportDialog } from './components/ExportDialog';
 import { Editor } from '@tiptap/react';
 import type { AtmosphereState, Theme } from './types';
 import { computeTagFrequency, loadTagsByDoc, updateDocTags } from './utils/tags';
-import { useDebounce } from './hooks/useDebounce';
+import { useDocumentSession } from './hooks/useDocumentSession';
 import { TimelineSidebar } from './components/TimelineSidebar';
 import { useTypingLock } from './hooks/useTypingLock';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
-import { usePanelMutualExclusion } from './hooks/usePanelMutualExclusion';
 import { useFocusTimer } from './hooks/useFocusTimer';
 import { useAtmospherePanel } from './hooks/useAtmospherePanel';
 import { useAudio } from './hooks/useAudio';
 import { useThemeCSS } from './hooks/useThemeCSS';
-import { encodeEmptyLines, decodeEmptyLines, applyEncodedContent } from './utils/emptyLines';
-import { SlidersHorizontal, Columns } from 'lucide-react';
+import { decodeEmptyLines } from './utils/emptyLines';
+import { SlidersHorizontal, Columns, Search, ArrowLeft } from 'lucide-react';
 
 const themeConfigs: Record<Theme, { bg: string; text: string; muted: string }> = {
-  paper: { bg: '#F4EAD5', text: '#2f3441', muted: '#8A8275' },
-  white: { bg: '#FFFFFF', text: '#2f3441', muted: '#9CA3AF' },
-  night: { bg: '#0D1424', text: '#E2E8F0', muted: '#64748B' },
+  paper: { bg: '#FAF8F5', text: '#343C38', muted: '#777E76' },
+  white: { bg: '#FFFFFF', text: '#343C38', muted: '#777E76' },
+  night: { bg: '#171D1B', text: '#E3E7E0', muted: '#9BA69C' },
 };
 
 
@@ -92,71 +94,119 @@ export default function App() {
 
   // === Hook extractions ===
   const { isTyping, isIdle, handleTyping } = useTypingLock();
-  const { panelOpen, setPanelOpen, panelRef, panelBtnRef } = useAtmospherePanel();
-  const { isFocusMode, focusTimeLeft, focusDuration, setFocusDuration, toggleFocusMode, toast, setToast } = useFocusTimer();
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { panelOpen, setPanelOpen: setPanelOpenState, panelRef, panelBtnRef } = useAtmospherePanel();
+  const { isFocusMode, focusTimeLeft, focusDuration, setFocusDuration, toggleFocusMode, toast, setToast } = useFocusTimer(atmosphere.sound !== 'none', atmosphere.volume);
+  const [paletteOpen, setPaletteOpenState] = useState(false);
+  const [sidebarOpen, setSidebarOpenState] = useState(false);
   const [sidebarPinned, setSidebarPinned] = useState(false);
-  const [text, setText] = useState('');
-  const [currentFilename, setCurrentFilename] = useState<string | null>(null);
-  const lastSavedContent = useRef('');
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const closing = useRef(false);
   const [tagsRev, setTagsRev] = useState(0);
   const [targetSearchText, setTargetSearchText] = useState<string | null>(null);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [exportOpen, setExportOpenState] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy });
+  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy };
+  const setPaletteOpen = useCallback((value: React.SetStateAction<boolean>) => {
+    const state = overlays.current;
+    if (state.exportOpen) return;
+    const next = typeof value === 'function' ? value(state.paletteOpen) : value;
+    setPaletteOpenState(next);
+    if (next) setPanelOpenState(false);
+  }, [setPanelOpenState]);
+  const setPanelOpen = useCallback((value: React.SetStateAction<boolean>) => {
+    const state = overlays.current;
+    if (state.exportOpen) return;
+    const next = typeof value === 'function' ? value(state.panelOpen) : value;
+    setPanelOpenState(next);
+    if (next) setPaletteOpenState(false);
+  }, [setPanelOpenState]);
+  const setSidebarOpen = useCallback((value: React.SetStateAction<boolean>) => {
+    const state = overlays.current;
+    if (state.exportOpen) return;
+    const next = typeof value === 'function' ? value(state.sidebarOpen) : value;
+    setSidebarOpenState(next);
+    if (next) { setPaletteOpenState(false); setPanelOpenState(false); }
+  }, [setPanelOpenState]);
+  const setExportOpen = useCallback((open: boolean) => {
+    if (overlays.current.exportBusy) return;
+    setExportOpenState(open);
+    if (open) { setPaletteOpenState(false); setPanelOpenState(false); }
+  }, [setPanelOpenState]);
+  const dialogOpen = paletteOpen || panelOpen || exportOpen;
+  const visibleSidebar = sidebarOpen && !dialogOpen;
   // 区间日记浏览模式：加载区间内所有日记，侧边栏展示朋友圈式时间流
   const [rangeDocs, setRangeDocs] = useState<{ date: string; content: string }[]>([]);
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [rangeError, setRangeError] = useState<string | null>(null);
+  const rangeRequest = useRef(0);
+  useEffect(() => {
+    if (!sidebarOpen || rangeLabel === null) {
+      rangeRequest.current += 1;
+      setRangeLoading(false);
+    }
+  }, [sidebarOpen, rangeLabel]);
 
-  const debouncedText = useDebounce(text, 1500);
+  const onSaved = useCallback((filename: string, content: string) => {
+    updateDocTags(filename, content);
+    setTagsRev(n => n + 1);
+  }, []);
+  const { text, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
+    change: changeText, open: openDocument, flush } = useDocumentSession(editor, onSaved);
 
-  // === Side-effect hooks ===
   useAudio(atmosphere.sound, atmosphere.volume);
   useThemeCSS(activeTheme as Theme);
 
-  // Startup: rebuild shadow index + load today's doc
   useEffect(() => {
-    const initToday = async () => {
-      invoke('rebuild_shadow_index').catch((err) => console.warn('Shadow index sync warning:', err));
-      try {
-        const t = todayKey() + '.md';
-        const content = await invoke<string>('load_document', { filename: t });
-        setCurrentFilename(t);
-        const encoded = encodeEmptyLines(content);
-        setText(encoded);
-        lastSavedContent.current = content;
-        if (editor) applyEncodedContent(editor, encoded);
-      } catch {
-        const t = todayKey() + '.md';
-        setCurrentFilename(t);
-        setText('');
-        lastSavedContent.current = '';
-      }
-    };
-    initToday();
-  }, [editor]);
+    if (editor) void openDocument(todayKey() + '.md', true);
+  }, [editor, openDocument]);
 
-  // Auto-save
+  const closeState = useRef({ loading: true, storageBusy: false });
+  closeState.current = { loading, storageBusy };
   useEffect(() => {
-    const rawText = decodeEmptyLines(debouncedText);
-    if (!rawText.trim() || rawText === lastSavedContent.current) return;
-
-    const autoSave = async () => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onCloseRequested(async event => {
+      event.preventDefault();
+      if (closing.current || closeState.current.loading || closeState.current.storageBusy) return;
+      closing.current = true;
+      setStorageBusy(true);
       try {
-        const result = await invoke<string>('save_document', {
-          content: rawText,
-          currentFilename: currentFilename,
-        });
-        setCurrentFilename(result);
-        lastSavedContent.current = rawText;
-        updateDocTags(result, rawText);
-        setTagsRev(n => n + 1);
-      } catch (err) {
-        console.error('Silent Auto-save Error:', err);
+        await flush();
+        await invoke('create_backup');
+        await getCurrentWindow().destroy();
+      } catch (cause) {
+        setStorageError(`退出前未能完成保存或备份，请重试。${String(cause)}`);
+      } finally {
+        closing.current = false;
+        setStorageBusy(false);
       }
-    };
-    autoSave();
-  }, [debouncedText, currentFilename]);
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; })
+      .catch(cause => setStorageError(`无法启用退出前保存：${String(cause)}`));
+    return () => { disposed = true; unlisten?.(); };
+  }, [flush]);
+
+  const runStorageAction = useCallback(async (action: () => Promise<unknown>) => {
+    if (storageBusy || loading) return;
+    setStorageBusy(true);
+    setStorageError(null);
+    try {
+      await flush();
+      await action();
+    } catch (cause) {
+      setStorageError(`操作未完成：${String(cause)}`);
+    } finally {
+      setStorageBusy(false);
+    }
+  }, [flush, storageBusy, loading]);
+
+  useEffect(() => {
+    if (notice) setToast(notice.message);
+  }, [notice, setToast]);
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -165,17 +215,23 @@ export default function App() {
     return () => clearTimeout(id);
   }, [toast]);
 
-  // Panel mutual exclusion
-  usePanelMutualExclusion(paletteOpen, sidebarOpen, setPaletteOpen, setSidebarOpen, sidebarPinned);
-
-  // 打开 Cmd+K 面板：自动退出区间浏览模式并收起侧边栏，避免两个悬浮面板叠加
   useEffect(() => {
-    if (!paletteOpen) return;
+    if (!dialogOpen || sidebarPinned) return;
+    setSidebarOpenState(false);
     setRangeDocs([]);
     setRangeLabel(null);
-    setSidebarPinned(false);
-    setSidebarOpen(false);
-  }, [paletteOpen]);
+  }, [dialogOpen, sidebarPinned]);
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || dialogOpen || !visibleSidebar) return;
+      setSidebarOpenState(false);
+      setSidebarPinned(false);
+      editor?.view.dom.focus({ preventScroll: true });
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [dialogOpen, visibleSidebar, editor]);
 
   // Global shortcuts
   useGlobalShortcuts(
@@ -183,6 +239,7 @@ export default function App() {
     sidebarOpen, setSidebarOpen, sidebarPinned, setSidebarPinned,
     panelOpen, setPanelOpen,
     toggleFocusMode,
+    exportOpen || storageBusy,
   );
 
   // Tag click event listener
@@ -205,7 +262,7 @@ export default function App() {
 
   const rawDisplay = decodeEmptyLines(text);
   const charCount = rawDisplay.replace(/\s/g, '').length;
-  const headerBg = activeTheme === 'night' ? 'rgba(13, 20, 36, 0.38)' : 'rgba(255, 255, 255, 0.48)';
+  const headerBg = `${themeConfig.bg}ed`;
 
   const handleExportContent = useCallback(() => {
     return decodeEmptyLines(text);
@@ -214,39 +271,22 @@ export default function App() {
   // === Document navigation helper ===
   // 成功切换返回目标日期字符串；失败（文件不存在）返回 null
   const switchToDocument = useCallback(async (date: string, searchText?: string): Promise<{ date: string | null }> => {
-    const filename = `${date}.md`;
-    if (filename === currentFilename) return { date };
-    const rawCurrent = decodeEmptyLines(text);
-    if (rawCurrent !== lastSavedContent.current && currentFilename) {
-      await invoke('save_document', { content: rawCurrent, currentFilename });
-    }
-    try {
-      const content = await invoke<string>('load_document', { filename });
-      const encoded = encodeEmptyLines(content);
-      if (editor) applyEncodedContent(editor, encoded);
-      setCurrentFilename(filename);
-      setText(encoded);
-      lastSavedContent.current = content;
-      updateDocTags(filename, content);
-      setTagsRev(n => n + 1);
-      return { date };
-    } catch {
-      // 目标日期文件不存在：回退到"今天"新建流程（仅重置状态，由调用方决定提示）
-      setTargetSearchText(searchText ?? null);
-      return { date: null };
-    }
-  }, [currentFilename, text, editor]);
+    if (storageBusy) return { date: null };
+    const filename = date.endsWith('.md') ? date : `${date}.md`;
+    const opened = await openDocument(filename, filename === `${todayKey()}.md`);
+    if (opened) setTargetSearchText(searchText ?? null);
+    return { date: opened ? date : null };
+  }, [openDocument, storageBusy]);
 
-  const loadDocument = useCallback((content: string, filename: string, targetSearchText?: string) => {
-    const encoded = encodeEmptyLines(content);
-    if (editor) applyEncodedContent(editor, encoded);
-    setCurrentFilename(filename);
-    setText(encoded);
-    lastSavedContent.current = content;
-    updateDocTags(filename, content);
-    setTagsRev(n => n + 1);
-    return { targetSearchText };
-  }, [editor]);
+  useEffect(() => {
+    const handleLink = (event: Event) => {
+      const docName = (event as CustomEvent<{ docName: string }>).detail.docName;
+      if (storageBusy) return;
+      void openDocument(docName.endsWith('.md') ? docName : `${docName}.md`);
+    };
+    window.addEventListener('silens-link-click', handleLink);
+    return () => window.removeEventListener('silens-link-click', handleLink);
+  }, [openDocument, storageBusy]);
 
   // 定位到 [startKey, endKey] 区间内最新的日记；兼容带后缀文件名（YYYY-MM-DD_xxx.md）
   const jumpToRange = useCallback(async (startKey: string, endKey: string): Promise<string | null> => {
@@ -258,7 +298,7 @@ export default function App() {
       const inRange = docNames
         .filter((f) => { const k = f.slice(0, 10); return k >= startKey && k <= endKey; })
         .sort();
-      return inRange.length > 0 ? inRange[inRange.length - 1].slice(0, 10) : null;
+      return inRange.length > 0 ? inRange[inRange.length - 1] : null;
     } catch (err) {
       console.error('区间查询失败:', err);
       return null;
@@ -270,6 +310,10 @@ export default function App() {
   // - 单边 → 定位到该侧最新一篇日记并打开主编辑器
   const jumpToCustomRange = useCallback(async (start?: string, end?: string) => {
     if (start && end) {
+      const request = ++rangeRequest.current;
+      setRangeDocs([]);
+      setRangeLoading(true);
+      setRangeError(null);
       // 双边：同步激活区间浏览模式（侧边栏时间流），主页保持当前文档不动。
       // 固定侧边栏，防止 mouseleave / 面板互斥逻辑把刚打开的区间侧边栏关掉
       setRangeLabel(`${start} – ${end}`);
@@ -291,13 +335,17 @@ export default function App() {
           if (existing) existing.content += (existing.content ? '\n\n' : '') + d.content;
           else merged.push({ date, content: d.content });
         }
+        if (request !== rangeRequest.current) return;
         setRangeDocs(merged);
         setToast(merged.length > 0
           ? `正在浏览 ${start} – ${end}，共 ${merged.length} 天`
           : `${start} – ${end} 暂无记录`);
       } catch (err) {
+        if (request !== rangeRequest.current) return;
         console.error('加载区间日记失败:', err);
-        setToast('加载失败');
+        setRangeError('暂时无法读取这个区间，请稍后重试');
+      } finally {
+        if (request === rangeRequest.current) setRangeLoading(false);
       }
       return;
     }
@@ -311,7 +359,7 @@ export default function App() {
       }
       if (target) {
         const { date } = await switchToDocument(target);
-        setToast(date ? `已穿梭至 ${date}` : `${target} 加载失败，已切换到今天`);
+        setToast(date ? `已打开 ${date}` : `${target} 未能打开，当前页面保持不变`);
       } else {
         const rangeDesc = start ? `${start} 至今` : `截至 ${end}`;
         setToast(`${rangeDesc} 暂无记录`);
@@ -325,10 +373,10 @@ export default function App() {
   // 时间穿梭（昨天/本周/本月）：定位到范围内最新的日记
   const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month') => {
     try {
-      let target: string;
+      let target: string | null;
       if (preset === 'yesterday') {
         const yKey = yesterdayKey();
-        target = (await jumpToRange(yKey, yKey)) ?? yKey;
+        target = await jumpToRange(yKey, yKey);
       } else {
         const todayK = todayKey();
         const startKey = preset === 'this-week'
@@ -340,14 +388,18 @@ export default function App() {
               return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
             })()
           : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
-        target = (await jumpToRange(startKey, todayK)) ?? startKey;
+        target = await jumpToRange(startKey, todayK);
+      }
+      if (!target) {
+        setToast(`${{ yesterday: '昨天', 'this-week': '本周', 'this-month': '本月' }[preset]}还没有笔记`);
+        return;
       }
 
       const { date } = await switchToDocument(target);
       if (date) {
         setToast(`已穿梭至 ${date}`);
       } else {
-        setToast(`${target} 暂无记录，已切换到今天`);
+        setToast(`${target} 未能打开，当前页面保持不变`);
       }
     } catch (err) {
       console.error('时间穿梭失败:', err);
@@ -356,6 +408,7 @@ export default function App() {
   }, [jumpToRange, switchToDocument, setToast]);
 
   return (
+    <MotionConfig reducedMotion="user">
     <div
       className="transition-colors duration-500 ease-in-out"
       style={{
@@ -370,61 +423,29 @@ export default function App() {
           transition: caret-color 0.15s ease-in-out;
         }
       `}</style>
-      {isTyping && (
+      {isTyping && !dialogOpen && !visibleSidebar && (
         <style>{`
           * { cursor: none !important; }
           .ProseMirror { caret-color: rgba(75, 85, 99, 1) !important; }
         `}</style>
       )}
 
-      {/* Stars background */}
-      <div
-        className="fixed inset-0 pointer-events-none transition-opacity duration-1000 z-0"
-        style={{ opacity: activeTheme === 'night' ? 1 : 0 }}
-      >
-        <div className="star-layer star-layer-1"></div>
-        <div className="star-layer star-layer-2"></div>
-        <div className="star-layer star-layer-3"></div>
-        <style>{`
-          .star-layer {
-            position: absolute; top: 0; left: 0; background: transparent; border-radius: 50%;
-          }
-          .star-layer-1 {
-            width: 1px; height: 1px;
-            box-shadow: 12vw 23vh rgba(255,255,255,0.8), 45vw 67vh rgba(255,255,255,0.8), 82vw 14vh rgba(255,255,255,0.8), 22vw 83vh rgba(255,255,255,0.8), 64vw 35vh rgba(255,255,255,0.8), 91vw 92vh rgba(255,255,255,0.8), 53vw 54vh rgba(255,255,255,0.8), 77vw 81vh rgba(255,255,255,0.8), 8vw 9vw rgba(255,255,255,0.8), 34vw 45vh rgba(255,255,255,0.8);
-            animation: twinkle 4s infinite alternate;
-          }
-          .star-layer-2 {
-            width: 1.5px; height: 1.5px;
-            box-shadow: 17vw 18vh rgba(255,255,255,0.7), 38vw 72vh rgba(255,255,255,0.7), 71vw 28vh rgba(255,255,255,0.7), 28vw 88vh rgba(255,255,255,0.7), 61vw 48vh rgba(255,255,255,0.7), 88vw 83vh rgba(255,255,255,0.7), 6vw 53vh rgba(255,255,255,0.7), 48vw 8vw rgba(255,255,255,0.7), 96vw 42vh rgba(255,255,255,0.7), 32vw 95vh rgba(255,255,255,0.7), 10vw 60vh rgba(255,255,255,0.7), 80vw 60vh rgba(255,255,255,0.7);
-            animation: twinkle 3s infinite alternate 1.5s;
-          }
-          .star-layer-3 {
-            width: 2px; height: 2px;
-            box-shadow: 33vw 35vh rgba(255,255,255,0.6), 68vw 62vh rgba(255,255,255,0.6), 55vw 94vh rgba(255,255,255,0.6), 13vw 86vh rgba(255,255,255,0.6), 84vw 38vh rgba(255,255,255,0.6), 42vw 15vh rgba(255,255,255,0.6), 90vw 20vh rgba(255,255,255,0.6);
-            animation: twinkle 5s infinite alternate 2.5s;
-          }
-          @keyframes twinkle {
-            0% { opacity: 0.2; transform: scale(0.8); }
-            100% { opacity: 1; transform: scale(1.2); }
-          }
-        `}</style>
-      </div>
 
       {/* Settings button */}
       <button
         ref={panelBtnRef}
         onClick={() => setPanelOpen(prev => !prev)}
-        className="fixed bottom-6 right-6 z-30 transition-all duration-300 ease-in-out hover:opacity-100"
+        className="chrome-control chrome-fade fixed bottom-6 right-6 z-30"
+        data-visible={isIdle || panelOpen}
         style={{
-          opacity: isIdle ? 0.35 : 0,
-          pointerEvents: isIdle ? 'auto' : 'none',
-          color: themeConfig.text,
-          background: 'none', border: 'none', cursor: 'pointer', padding: '8px',
+          pointerEvents: isIdle || panelOpen ? 'auto' : 'none',
+          color: themeConfig.muted,
+          background: 'none', border: 'none', cursor: 'pointer', padding: '10px',
         }}
+        aria-label="书写氛围"
         title="氛围设置 (⌘⇧M)"
       >
-        <SlidersHorizontal size={14} strokeWidth={1} />
+        <SlidersHorizontal size={16} strokeWidth={1.5} />
       </button>
 
       {/* Bottom vignette */}
@@ -443,56 +464,63 @@ export default function App() {
 
       {/* Word count */}
       <div
-        className="fixed bottom-6 left-0 right-0 z-30 pointer-events-none flex justify-center"
-        style={{
-          paddingLeft: sidebarOpen ? '320px' : '0px',
-          transition: 'padding-left 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-        }}
+        className={`chrome-footer fixed bottom-6 left-0 right-0 z-30 pointer-events-none flex justify-center ${visibleSidebar ? 'chrome-footer-shifted' : ''}`}
       >
         <div
-          className="select-none flex items-center text-[10px] tracking-[0.2em] transition-all duration-300 ease-in-out"
-          style={{ opacity: isIdle ? 0.35 : 0, color: themeConfig.text }}
+          className="chrome-fade select-none flex items-center text-[11px] tracking-[0.06em]"
+          data-visible={isIdle}
+          style={{ color: themeConfig.muted }}
         >
           <span>{charCount} 字</span>
+          <span className="ml-3" aria-live="polite">{saveStatus === 'saving' ? '保存中' : saveStatus === 'pending' ? '待保存' : saveStatus === 'error' ? '尚未保存' : '本地保存'}</span>
         </div>
       </div>
 
       {/* Header */}
       <div
-        className={`fixed top-0 left-0 right-0 z-40 flex flex-col items-center pt-5 pb-4 backdrop-blur-md transition-all duration-300 ease-in-out ${
-          (isIdle && !sidebarOpen) ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        style={{ backgroundColor: headerBg }}
+        className="chrome-fade fixed top-0 left-0 right-0 z-40 flex flex-col items-center pt-5 pb-4"
+        data-visible={isIdle && !visibleSidebar}
+        style={{ backgroundColor: headerBg, pointerEvents: isIdle && !visibleSidebar ? 'auto' : 'none' }}
       >
         <button
           type="button"
-          className="absolute top-5 left-4 transition-all duration-300 ease-in-out"
+          className="chrome-control absolute top-4 left-4 p-2"
           style={{
-            opacity: 0.25,
-            color: themeConfig.text,
+            color: themeConfig.muted,
             pointerEvents: currentFilename ? 'auto' : 'none',
           }}
           onClick={() => {
             setPaletteOpen(false);
             setSidebarOpen(true);
           }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.7'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.25'; }}
-          title="查看标签汇总 (Cmd/Ctrl + L)"
+          title="回顾笔记 (Cmd/Ctrl + L)"
+          aria-label="回顾笔记"
         >
           <Columns size={16} strokeWidth={1.5} />
         </button>
         <div
-          className="transition-all duration-300 ease-in-out select-none font-semibold"
+          className="select-none font-medium"
           style={{
-            opacity: 0.65,
             color: themeConfig.muted,
-            fontSize: '13px',
-            letterSpacing: '0.25em',
+            fontSize: '11px',
+            letterSpacing: '0.22em',
           }}
         >
           SILENS
         </div>
+        <div className="mt-2 flex items-center gap-3 text-xs" style={{ color: themeConfig.muted }}>
+          <span>{currentFilename ? currentFilename.replace(/\.md$/, '') : '正在打开笔记'}</span>
+          {currentFilename && currentFilename !== `${todayKey()}.md` && (
+            <button className="flex items-center gap-1 hover:opacity-70" onClick={() => { void switchToDocument(todayKey()); }}>
+              <ArrowLeft size={12} /> 回到今天
+            </button>
+          )}
+        </div>
+        <button aria-label="搜索笔记" title="搜索笔记 (Cmd/Ctrl + K)"
+          className="chrome-control absolute right-4 top-4 p-2"
+          style={{ color: themeConfig.muted }} onClick={() => setPaletteOpen(true)}>
+          <Search size={16} strokeWidth={1.5} />
+        </button>
       </div>
 
       {/* Main canvas */}
@@ -503,18 +531,18 @@ export default function App() {
           if (rangeLabel !== null || sidebarOpen) {
             setRangeDocs([]);
             setRangeLabel(null);
-            setSidebarPinned(false);
-            if (!sidebarPinned) setSidebarOpen(false);
+            if (!sidebarPinned) { setSidebarPinned(false); setSidebarOpen(false); }
           }
         }}
       >
         <Canvas
           theme={activeTheme}
           uiVisible={isIdle}
-          isSidebarOpen={sidebarOpen}
+          isSidebarOpen={visibleSidebar}
           onTyping={handleTyping}
           onMouseMove={() => {}}
-          onChange={setText}
+          onChange={changeText}
+          disabled={loading || storageBusy || !currentFilename}
           onEditorReady={setEditor}
           isFocusMode={isFocusMode}
           knownTags={knownTags}
@@ -532,7 +560,6 @@ export default function App() {
         onTagManaged={() => setTagsRev(n => n + 1)}
         onSelectResult={async (date, searchText) => {
           await switchToDocument(date, searchText);
-          setTargetSearchText(searchText);
           setPaletteOpen(false);
         }}
         onQuickJump={async (preset, customRange) => {
@@ -543,17 +570,18 @@ export default function App() {
           }
           if (preset) await jumpToTimeRange(preset);
         }}
-        onLoadDocument={(content, filename, targetSearchText) => {
-          loadDocument(content, filename, targetSearchText);
-          setTargetSearchText(targetSearchText ?? null);
+        onLoadDocument={async (_content, filename, target) => {
+          if (await openDocument(filename)) setTargetSearchText(target ?? null);
         }}
       />
 
       {/* Timeline sidebar */}
-      <div style={{ pointerEvents: isTyping ? 'none' : 'auto' }}>
+      <div>
         <TimelineSidebar
-          isOpen={sidebarOpen}
-          setIsOpen={setSidebarOpen}
+          isOpen={visibleSidebar}
+          isPinned={sidebarPinned}
+          onTogglePin={() => setSidebarPinned(pinned => !pinned)}
+          setIsOpen={open => { setSidebarOpen(open); if (!open) setSidebarPinned(false); }}
           isPaletteOpen={paletteOpen}
           externalForceTag={undefined}
           onClearForceTag={() => {}}
@@ -576,43 +604,21 @@ export default function App() {
             if (!isBoth && !sidebarPinned) setSidebarOpen(false);
           }}
           rangeDocs={rangeDocs}
+          rangeLoading={rangeLoading}
+          rangeError={rangeError}
           rangeLabel={rangeLabel}
           onClearRange={() => { setRangeDocs([]); setRangeLabel(null); setSidebarPinned(false); }}
           onSelectResult={async (date, searchText) => {
             await switchToDocument(date, searchText);
-            setTargetSearchText(searchText);
             setRangeDocs([]);
             setRangeLabel(null);
-            setSidebarPinned(false);
-            if (!sidebarPinned) setSidebarOpen(false);
+            if (!sidebarPinned) { setSidebarPinned(false); setSidebarOpen(false); }
           }}
           onDateClick={async (date) => {
             setRangeDocs([]);
             setRangeLabel(null);
-            const filename = `${date}.md`;
-            if (filename === currentFilename) {
-              if (!sidebarPinned) setSidebarOpen(false);
-              return;
-            }
-            const rawCurrent = decodeEmptyLines(text);
-            if (rawCurrent !== lastSavedContent.current && currentFilename) {
-              await invoke('save_document', { content: rawCurrent, currentFilename });
-            }
-            try {
-              const content = await invoke<string>('load_document', { filename });
-              const encoded = encodeEmptyLines(content);
-              if (editor) applyEncodedContent(editor, encoded);
-              setCurrentFilename(filename);
-              setText(encoded);
-              lastSavedContent.current = content;
-              updateDocTags(filename, content);
-              setTagsRev(n => n + 1);
-              if (!sidebarPinned) setSidebarOpen(false);
-              setToast(`已穿梭至 ${date}`);
-            } catch (err) {
-              console.error('Failed to switch document:', err);
-              setToast(`加载失败，该天可能没有记录`);
-            }
+            const { date: opened } = await switchToDocument(date);
+            if (opened && !sidebarPinned) setSidebarOpen(false);
           }}
         />
       </div>
@@ -630,20 +636,46 @@ export default function App() {
         activeTheme={activeTheme as Theme}
         focusDuration={focusDuration}
         onFocusDurationChange={setFocusDuration}
+        storageBusy={storageBusy || loading}
+        onOpenStorage={() => { void invoke('open_storage_folder').catch(cause => setStorageError(String(cause))); }}
+        onOpenBackups={() => { void invoke('open_backups_folder').catch(cause => setStorageError(String(cause))); }}
+        onBackup={() => { void runStorageAction(async () => { await invoke('create_backup'); setToast('备份已保存'); }); }}
+        onMoveWorkspace={() => { void runStorageAction(async () => {
+          const selected = await openFolderDialog({ directory: true, multiple: false, title: '选择笔记文件夹的位置' });
+          if (typeof selected !== 'string') return;
+          await invoke('change_storage_path', { newPath: selected });
+          await openDocument(currentFilename ?? `${todayKey()}.md`, true, 'reload');
+          setTagsRev(n => n + 1);
+          setToast('笔记已迁移，原文件仍保留');
+        }); }}
       />
 
       {/* Export dialog */}
       <ExportDialog
         open={exportOpen}
-        onClose={() => setExportOpen(false)}
+        onClose={() => setExportOpenState(false)}
+        onBusyChange={setExportBusy}
         theme={activeTheme as Theme}
         themeConfig={themeConfig}
         exportContent={handleExportContent}
         filename={currentFilename ?? ''}
       />
 
+      {!dialogOpen && (saveError || storageError) && (
+        <div role="alert" className="fixed bottom-16 left-1/2 z-[10000] w-[min(90vw,520px)] -translate-x-1/2 rounded-xl border p-4 text-sm shadow-sm"
+          style={{ background: themeConfig.bg, color: themeConfig.text, borderColor: 'var(--theme-muted)' }}>
+          <p>{saveError || storageError}</p>
+          <div className="mt-3 flex gap-4">
+            <button onClick={() => { void (currentFilename ? flush() : openDocument(`${todayKey()}.md`, true)).catch(() => {}); setStorageError(null); }}>重试</button>
+            <button onClick={() => setExportOpen(true)}>导出当前文字</button>
+            {saveStatus === 'error' && currentFilename && <button onClick={() => { void openDocument(currentFilename, true, 'preserve'); }}>保留副本并重新读取</button>}
+            {storageError && !saveError && <button onClick={() => setStorageError(null)}>收起</button>}
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
-      {toast && (
+      {toast && !dialogOpen && !isTyping && (
         <div
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-black/20 text-xs tracking-widest"
           style={{ color: themeConfig.muted }}
@@ -655,11 +687,9 @@ export default function App() {
       {/* Focus mode indicator */}
       {isFocusMode && (
         <div
-          className="fixed bottom-6 left-6 z-[180] text-[10px] tracking-widest select-none pointer-events-none transition-all duration-300 ease-in-out"
-          style={{
-            color: themeConfig.muted,
-            opacity: isIdle ? 0.35 : 0,
-          }}
+          className="chrome-fade fixed bottom-6 left-6 z-[180] text-[11px] tracking-wide select-none pointer-events-none"
+          data-visible={isIdle}
+          style={{ color: themeConfig.muted }}
         >
           一期一会已开启 {focusTimeLeft !== null && focusTimeLeft > 0
             ? `· ${Math.floor(focusTimeLeft / 60).toString().padStart(2, '0')}:${(focusTimeLeft % 60).toString().padStart(2, '0')}`
@@ -667,5 +697,6 @@ export default function App() {
         </div>
       )}
     </div>
+    </MotionConfig>
   );
 }

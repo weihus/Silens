@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { Search } from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSegmentDateInput';
 
 export interface SearchResult {
@@ -33,7 +34,7 @@ const HighlightText = ({ text, query }: { text: string; query: string }) => {
     <>
       {parts.map((part, i) =>
         part.toLowerCase() === query.toLowerCase() ? (
-          <span key={i} className="text-gray-900 font-medium bg-gray-200/40 px-0.5 rounded-sm">{part}</span>
+          <span key={i} className="font-medium px-0.5 rounded-sm" style={{ backgroundColor: 'color-mix(in srgb, var(--theme-text) 8%, transparent)' }}>{part}</span>
         ) : (
           <span key={i}>{part}</span>
         )
@@ -48,6 +49,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectResult,
   onQuickJump,
 }) => {
+  const reducedMotion = useReducedMotion();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -64,15 +66,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useDialogFocus(open, () => onOpenChange(false), inputRef);
 
   // 零状态：时光穿梭快捷选项（查询为空时渲染，键盘可导航，回车触发）
   const QUICK_JUMP_ACTIONS = [
-    { id: 'yesterday', icon: '📅', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
-    { id: 'this-week', icon: '🗓️', label: '查看本周', action: () => onQuickJump?.('this-week') },
-    { id: 'this-month', icon: '🈷️', label: '查看本月', action: () => onQuickJump?.('this-month') },
+    { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
+    { id: 'this-week', label: '查看本周', action: () => onQuickJump?.('this-week') },
+    { id: 'this-month', label: '查看本月', action: () => onQuickJump?.('this-month') },
     {
       id: 'custom-range',
-      icon: '🔍',
       label: '自定义日期...',
       action: () => {
         // 起/止默认今天，用户只改要改的那一段
@@ -95,59 +97,45 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       setCustomStart({});
       setCustomEnd({});
       setSubmitted(false);
-      // 微小延时确保动画渲染后焦点正常获取
-      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
 
   // 2. 防抖搜索与 IPC 调用
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
+    setResults([]);
+    if (!open || !query.trim()) {
+      setIsSearching(false);
       return;
     }
 
+    let cancelled = false;
     setIsSearching(true);
     const timer = setTimeout(async () => {
       try {
         // 调用 Tauri 后端的 search_notes (待后端实现)
         const res = await invoke<SearchResult[]>('search_notes', { query: query.trim() });
+        if (cancelled) return;
         setResults(res || []);
         setSelectedIndex(0);
       } catch (err) {
         console.error('Search error:', err);
-        setResults([]);
+        if (!cancelled) setResults([]);
       } finally {
-        setIsSearching(false);
+        if (!cancelled) setIsSearching(false);
       }
-    }, 300); // 300ms 防抖
+    }, 300);
 
-    return () => clearTimeout(timer);
-  }, [query]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query, open]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setQuery('');
-        setSelectedIndex(0);
-        setCustomMode(false);
-        onOpenChange(false);
-        return;
-      }
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
 
       // 零状态：查询为空时时光穿梭列表优先接管键盘
       if (!query.trim()) {
         // 自定义日期模式：仅手动"穿梭 →"触发，Esc 退出
-        if (customMode) {
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            setCustomMode(false);
-            setQuery('');
-            onOpenChange(false);
-          }
-          return;
-        }
+        if (customMode) return;
         if (QUICK_JUMP_ACTIONS.length > 0) {
           if (e.key === 'ArrowDown') {
             e.preventDefault();
@@ -163,10 +151,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               setQuery('');
               onOpenChange(false);
             }
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setQuery('');
-            onOpenChange(false);
           }
           return;
         }
@@ -194,13 +178,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     [query, results, selectedIndex, onOpenChange, onSelectResult, onQuickJump, customMode]
   );
 
-  // 自定义区间：仅手动"穿梭 →"按钮触发；面板保留显示回执后 1.2s 自动关闭
-  useEffect(() => {
-    if (!customMode || !submitted) return;
-    const timer = setTimeout(() => onOpenChange(false), 1200);
-    return () => clearTimeout(timer);
-  }, [customMode, submitted, onOpenChange]);
-
   // 4. 列表滚动跟随 (Scroll into view)
   useEffect(() => {
     if (listRef.current && results.length > 0) {
@@ -221,42 +198,53 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
             className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/5 backdrop-blur-[2px]"
             onClick={() => onOpenChange(false)}
           >
             {/* 悬浮 Spotlight 容器 */}
             <motion.div
-              initial={{ opacity: 0, y: -15, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -10, scale: 0.98 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
+              initial={{ opacity: 0, y: reducedMotion ? 0 : -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: reducedMotion ? 0 : -6 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-[640px] rounded-2xl bg-white/90 backdrop-blur-xl border border-black/5 shadow-[0_0_0_1px_rgba(0,0,0,0.03),0_30px_60px_rgba(0,0,0,0.12)] overflow-hidden flex flex-col"
+              ref={dialogRef}
+              role="dialog"
+              aria-label="搜索笔记"
+              aria-modal="true"
+              className="command-palette w-[calc(100%-32px)] rounded-xl border shadow-lg overflow-hidden flex flex-col"
+              style={{
+                maxWidth: results.length > 0 ? 680 : 460,
+                transition: reducedMotion ? 'none' : 'max-width 180ms ease-out',
+                backgroundColor: 'var(--theme-bg)',
+                borderColor: 'var(--theme-border)',
+                color: 'var(--theme-text)',
+              }}
             >
               {/* 顶部纯粹输入框 */}
               <div className="flex items-center px-4">
-                <Search size={20} className="text-gray-400 shrink-0 mr-3" strokeWidth={2} />
+                <Search size={17} className="shrink-0 mr-3 opacity-45" strokeWidth={1.5} />
                 <input
                   ref={inputRef}
                   type="text"
                   value={query}
-                  onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); }}
+                  onChange={(e) => { setQuery(e.target.value); setResults([]); setSelectedIndex(0); }}
                   onKeyDown={handleKeyDown}
                   placeholder="搜索笔记与灵感..."
-                  className="w-full h-16 text-lg bg-transparent border-none focus:outline-none focus:ring-0 text-gray-800 placeholder-gray-400"
+                  className="w-full h-[60px] text-[15px] bg-transparent border-none focus:outline-none focus:ring-0 text-inherit placeholder:text-current placeholder:opacity-40"
                   spellCheck={false}
                 />
               </div>
 
             {/* 零状态：时光穿梭快捷选项（输入为空时渲染，输入任意字符即卸载） */}
             {query.trim() === '' ? (
-              <div className="border-t border-gray-100/60 flex h-[50vh]">
+              <div className="border-t" style={{ borderColor: 'var(--theme-border)' }}>
                 {customMode ? (
                   /* 自定义日期区间输入 */
-                  <div className="w-full flex flex-col items-center justify-center gap-4">
+                  <div className="w-full flex flex-col items-center justify-center gap-4 px-4 py-6">
                     <div className="text-[10px] font-mono tracking-widest text-gray-400 uppercase">自定义日期</div>
-                    <div className="flex items-center gap-4">
+                    <div className="search-date-fields flex items-center gap-4">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-gray-400 font-mono">起</span>
                         <ThreeSegmentDateInput
@@ -306,86 +294,82 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div ref={listRef} className="w-[40%] overflow-y-auto p-2 custom-scrollbar flex flex-col border-r border-gray-100/50">
-                    {QUICK_JUMP_ACTIONS.map((item, idx) => (
-                      <div
-                        key={item.id}
-                        onClick={() => {
-                          item.action();
-                          if (item.id !== 'custom-range') onOpenChange(false);
-                        }}
-                        onMouseEnter={() => setSelectedIndex(idx)}
-                        className={`px-4 py-3 rounded-xl cursor-pointer flex flex-col gap-1.5 transition-colors duration-150 ${
-                          idx === selectedIndex ? 'bg-gray-100/70' : 'hover:bg-gray-50/40'
-                        }`}
-                      >
-                        <div className="text-[10px] font-mono tracking-widest text-gray-400 uppercase">
-                          时光穿梭
-                        </div>
-                        <div className="text-[13px] text-gray-700 leading-relaxed line-clamp-2">
-                          <span className="mr-2 opacity-60">{item.icon}</span>{item.label}
-                        </div>
-                      </div>
-                    ))}
+                  <div className="p-2">
+                    <div className="px-3 pt-2 pb-1 text-[11px] opacity-45">按时间回顾</div>
+                    <div ref={listRef} className="flex flex-col">
+                      {QUICK_JUMP_ACTIONS.map((item, idx) => (
+                        <button
+                          type="button"
+                          key={item.id}
+                          onClick={() => {
+                            item.action();
+                            if (item.id !== 'custom-range') onOpenChange(false);
+                          }}
+                          onMouseEnter={() => setSelectedIndex(idx)}
+                          className="w-full px-3 py-2.5 rounded-md text-left text-[13px] text-inherit transition-colors duration-150"
+                          style={{ backgroundColor: idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
-                {/* 右侧留白区：与结果态透视卡片同尺寸占位 */}
-                <div className="w-[60%] bg-gray-50/30" />
               </div>
             ) : (
-            <div className="border-t border-gray-100/60 flex h-[50vh]">
+            <div className="border-t flex" style={{ borderColor: 'var(--theme-border)', maxHeight: 'min(50vh, 400px)' }}>
               {results.length > 0 ? (
                 <>
                   {/* 左侧：列表区 (占 40%) */}
-                  <div ref={listRef} className="w-[40%] overflow-y-auto p-2 custom-scrollbar flex flex-col border-r border-gray-100/50">
+                  <div ref={listRef} className="search-results-list w-[40%] min-w-0 overflow-y-auto p-2 custom-scrollbar flex flex-col">
                     {results.map((res, idx) => (
-                      <div
+                      <button
+                        type="button"
                         key={res.id || idx}
+                        aria-label={`${res.date} ${res.snippet}`}
                         onClick={() => {
                           if (onSelectResult) onSelectResult(res.date, query);
-                        setQuery('');
-                        setResults([]);
+                          setQuery('');
+                          setResults([]);
                           onOpenChange(false);
                         }}
                         onMouseEnter={() => setSelectedIndex(idx)}
-                        className={`px-4 py-3 rounded-xl cursor-pointer flex flex-col gap-1.5 transition-colors duration-150 ${
-                          idx === selectedIndex ? 'bg-gray-100/70' : 'hover:bg-gray-50/40'
-                        }`}
+                        className="w-full shrink-0 px-3 py-3 rounded-md text-left text-inherit flex flex-col gap-1.5 transition-colors duration-150"
+                        style={{ backgroundColor: idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}
                       >
-                        <div className="text-[10px] font-mono tracking-widest text-gray-400 uppercase">
+                        <div className="text-[10px] opacity-45">
                           {res.date}
                         </div>
-                        <div className="text-[13px] text-gray-700 leading-relaxed line-clamp-2">
+                        <div className="text-[13px] leading-relaxed line-clamp-2">
                           <HighlightText text={res.snippet} query={query} />
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
 
-                  {/* 右侧：透视卡片预览区 (占 60%) */}
-                  <div className="w-[60%] bg-gray-50/30 overflow-y-auto custom-scrollbar p-8 relative">
-                    <AnimatePresence mode="wait">
-                      {selectedResult && (
-                        <motion.div
-                          key={selectedResult.id}
-                          initial={{ opacity: 0, filter: 'blur(2px)' }}
-                          animate={{ opacity: 1, filter: 'blur(0px)' }}
-                          exit={{ opacity: 0, filter: 'blur(2px)', transition: { duration: 0.1 } }}
-                          transition={{ duration: 0.2 }}
-                          className="h-full flex flex-col"
-                        >
-                          <div className="text-xs text-gray-400 mb-4 tracking-widest font-mono uppercase">{selectedResult.date}</div>
-                          <div className="text-sm leading-[1.8] text-gray-600 whitespace-pre-wrap tracking-[0.01em]">
-                            <HighlightText text={selectedResult.context_preview} query={query} />
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                  {selectedResult && (
+                    <section
+                      aria-label="笔记预览"
+                      className="search-preview w-[60%] min-w-0 border-l overflow-y-auto custom-scrollbar p-5"
+                      style={{ borderColor: 'var(--theme-border)' }}
+                    >
+                      <motion.div
+                        key={selectedResult.id}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.18, ease: 'easeOut' }}
+                      >
+                        <div className="text-xs opacity-45 mb-3">{selectedResult.date}</div>
+                        <div className="text-sm leading-[1.8] whitespace-pre-wrap break-words opacity-80">
+                          <HighlightText text={selectedResult.context_preview} query={query} />
+                        </div>
+                      </motion.div>
+                    </section>
+                  )}
                 </>
               ) : (
-                <div className="w-full flex items-center justify-center text-[13px] tracking-widest text-gray-400">
-                  {isSearching ? '正在潜入暗影索引...' : '未找到相关内容'}
+                <div role="status" className="w-full h-[112px] flex items-center justify-center text-[13px] opacity-45">
+                  {isSearching ? '正在搜索…' : '未找到相关内容'}
                 </div>
               )}
             </div>

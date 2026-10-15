@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Pin, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSegmentDateInput';
 
@@ -50,7 +51,7 @@ const ExpandableTextBlock: React.FC<{ timeLabel: string | null; textContent: str
       }}
     >
       {timeLabel && (
-        <span className="inline-block text-[10px] font-mono mr-3 align-baseline tracking-wide" style={{ color: 'var(--theme-text)', opacity: 0.4 }}>
+        <span className="inline-block text-xs font-mono mr-3 align-baseline tracking-wide" style={{ color: 'var(--theme-muted)' }}>
           <span className="inline-block w-1 h-1 rounded-full mr-1.5 align-middle relative -top-[1px]" style={{ backgroundColor: 'var(--theme-text)', opacity: 0.4 }}></span>
           {timeLabel}
         </span>
@@ -192,7 +193,7 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
             <MeasureItem key={block.id} index={actualIndex} onMeasure={onMeasure}>
               <div className="mb-10 group">
                 <div 
-                  className="text-[10px] font-mono tracking-widest opacity-30 mb-3 uppercase flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity w-fit"
+                  className="text-xs font-mono tracking-wide opacity-80 mb-3 uppercase flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity w-fit"
                   onClick={() => onDateClick?.(block.date)}
                   title="点击跳转到该天的日记"
                 >
@@ -237,9 +238,12 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
             }}
           />
           <div
-            className={`absolute right-7 transition-all duration-300 ease-out whitespace-nowrap bg-white/80 dark:bg-gray-900/80 backdrop-blur-md px-2 py-1 rounded-md shadow-[0_2px_8px_rgba(0,0,0,0.05)] border border-black/[0.03] dark:border-white/[0.05] text-[10px] font-mono tracking-wider text-gray-400 origin-right ${isDragging ? 'opacity-100 scale-110' : isScrolling ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100'}`}
+            className={`absolute right-7 transition-all duration-300 ease-out whitespace-nowrap px-2 py-1 rounded-md border text-xs font-mono tracking-wider origin-right ${isDragging ? 'opacity-100 scale-110' : isScrolling ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100'}`}
             style={{
               top: `${Math.min(100, Math.max(0, scrollPercent * 100))}%`,
+              backgroundColor: 'var(--theme-bg)',
+              borderColor: 'var(--theme-border)',
+              color: 'var(--theme-muted)',
               transform: 'translateY(-50%)'
             }}
           >
@@ -266,13 +270,18 @@ export const TimelineSidebar: React.FC<{
   onJumpTime?: (preset?: 'yesterday' | 'this-week' | 'this-month', customRange?: { start?: string; end?: string }) => void;
   rangeDocs?: { date: string; content: string }[];
   rangeLabel?: string | null;
+  rangeLoading?: boolean;
+  rangeError?: string | null;
   onClearRange?: () => void;
   theme: string;
   externalForceTag?: string | null;
   onClearForceTag?: () => void;
   isPaletteOpen?: boolean;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
   onPinDate?: (date: string) => void;
-}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeDocs, rangeLabel, onClearRange, theme, externalForceTag, onClearForceTag, isPaletteOpen, onPinDate }) => {
+}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeDocs, rangeLabel, rangeLoading = false, rangeError = null, onClearRange, theme, externalForceTag, onClearForceTag, isPinned = false, onTogglePin, onPinDate }) => {
+  const reduceMotion = useReducedMotion();
   const [records, setRecords] = useState<DayRecord[]>([]);
   const [viewMode, setViewMode] = useState<'timeline' | 'tag' | 'all-tags'>('timeline');
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -318,18 +327,9 @@ export const TimelineSidebar: React.FC<{
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [showJumpPopover]);
 
-  // 双边选齐（任意一边有至少一个字段）→ 通知 App 加载区间日记流（朋友圈式时间流）；单边 → 定位该侧最新日记
-  // 使用 PartialDate 比较：任意字段（年/月/日）被填上即触发，避免"只改月份"时 原生 date input value 为空导致 UI 无响应
+  // 自定义区间只在点击“查看”时提交，避免默认日期触发跳转。
   const startKey = startHasAny ? toPartialKey(customStart) : undefined;
   const endKey = endHasAny ? toPartialKey(customEnd) : undefined;
-  useEffect(() => {
-    if (!customJumpMode || !(startKey && endKey)) return;
-    onJumpTime?.(undefined, { start: startKey, end: endKey });
-    setShowJumpPopover(false);
-    setCustomJumpMode(false);
-    setCustomStart({});
-    setCustomEnd({});
-  }, [customJumpMode, startKey, endKey, onJumpTime]);
 
   // 打开侧边栏时清空自定义区间子状态
   useEffect(() => {
@@ -383,60 +383,58 @@ export const TimelineSidebar: React.FC<{
 
   return (
     <div
-      className={`fixed top-0 left-0 h-full z-[9999] transition-all duration-300 ${isOpen ? 'w-80' : 'w-4'}`}
-      onMouseEnter={() => !isPaletteOpen && !isOpen && setIsOpen(true)}
-      onMouseLeave={() => { if (isOpen && !inRangeMode) setIsOpen(false); }}
+      className={`timeline-sidebar fixed top-0 left-0 h-full z-[80] ${isOpen ? 'timeline-sidebar-open' : 'w-0'}`}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          if (showJumpPopover) setShowJumpPopover(false);
+          else setIsOpen(false);
+        }
+      }}
     >
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ x: '-100%', opacity: 0 }}
+            role="complementary"
+            aria-label="时间与标签"
+            initial={reduceMotion ? false : { x: '-100%', opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '-100%', opacity: 0 }}
-            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            className="h-full w-full backdrop-blur-xl shadow-[10px_0_40px_rgba(0,0,0,0.04)] dark:shadow-[10px_0_40px_rgba(0,0,0,0.15)] flex flex-col pt-20 border-r"
+            exit={{ x: reduceMotion ? 0 : '-100%', opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="h-full w-full flex flex-col pt-12 border-r"
             style={{
-              backgroundColor: theme === 'night' ? 'rgba(13, 20, 36, 0.85)' : theme === 'paper' ? 'rgba(244, 234, 213, 0.85)' : 'rgba(255, 255, 255, 0.85)',
-              borderColor: theme === 'night' ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.03)',
-              transition: 'background-color 0.8s ease, border-color 0.8s ease'
+              backgroundColor: theme === 'night' ? '#171D1B' : theme === 'paper' ? '#FAF8F5' : '#FFFFFF',
+              color: 'var(--theme-text)',
+              borderColor: 'var(--theme-border)',
             }}
           >
             {/* 顶部控制区：两个幽灵态模式切换指示器 */}
             <div
-              className="flex items-center justify-between px-8 pt-4 pb-2 select-none shrink-0 cursor-pointer transition-opacity hover:opacity-80"
-              onClick={() => setViewMode('timeline')}
+              className="flex items-center gap-2 px-6 pt-4 pb-6 select-none shrink-0"
             >
-              {/* 左侧：时间轴模式 —— 极细竖线 + 小圆点（点击弹出极简时间穿梭菜单） */}
-              <div
-                ref={jumpPopoverRef}
-                className="relative flex items-center gap-1.5"
-                style={{ opacity: viewMode === 'timeline' ? 0.4 : 0.15 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowJumpPopover((v) => !v);
-                }}
-              >
-                <div
-                  className="w-[1px] h-3"
-                  style={{ backgroundColor: 'var(--theme-text)' }}
-                />
-                <div
-                  className="w-1 h-1 rounded-full"
-                  style={{ backgroundColor: 'var(--theme-text)' }}
-                />
+              <div ref={jumpPopoverRef} className="relative flex items-center gap-1.5">
+                <button type="button" className="quiet-button rounded-md px-2 py-2 text-sm"
+                  aria-expanded={showJumpPopover} aria-haspopup="dialog"
+                  style={{ color: viewMode === 'timeline' ? 'var(--theme-text)' : 'var(--theme-muted)' }}
+                  onClick={() => { setViewMode('timeline'); setShowJumpPopover((value) => !value); }}>
+                  时间
+                </button>
                 {/* 极简毛玻璃 Popover */}
                 <AnimatePresence>
                   {showJumpPopover && (
                     <motion.div
-                      initial={{ opacity: 0, y: -4 }}
+                      role="dialog"
+                      aria-label="选择时间范围"
+                      initial={reduceMotion ? false : { opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.15, ease: 'easeOut' }}
-                      className="absolute left-0 top-full mt-1 z-50 rounded-md bg-[#2f3441]/5 backdrop-blur-md p-1"
+                      exit={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
+                      transition={{ duration: reduceMotion ? 0 : 0.15, ease: 'easeOut' }}
+                      className="timeline-date-popover absolute left-0 top-full mt-1 z-50 rounded-lg border p-3"
+                      style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}
                     >
                       {customJumpMode ? (
                         <div className="flex flex-col gap-1.5 px-1 py-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-col gap-3">
                             <ThreeSegmentDateInput
                               value={customStart}
                               onChange={(v) => setCustomStart(v)}
@@ -467,7 +465,7 @@ export const TimelineSidebar: React.FC<{
                             className="block w-full text-left px-2.5 py-1 text-xs font-mono whitespace-nowrap opacity-80 hover:opacity-100 disabled:opacity-20 transition-opacity"
                             style={{ color: 'var(--theme-text)' }}
                           >
-                            穿梭 →
+                            查看
                           </button>
                         </div>
                       ) : (
@@ -516,11 +514,23 @@ export const TimelineSidebar: React.FC<{
                   e.stopPropagation();
                   setViewMode('all-tags');
                 }}
-                className="text-[11px] font-mono transition-opacity"
-                style={{ color: 'var(--theme-text)', opacity: viewMode === 'timeline' ? 0.15 : 0.5 }}
+                className="quiet-button rounded-md px-2 py-2 text-sm"
+                aria-pressed={viewMode !== 'timeline'}
+                style={{ color: viewMode === 'timeline' ? 'var(--theme-muted)' : 'var(--theme-text)' }}
               >
-                #
+                标签
               </button>
+              <div className="ml-auto flex items-center gap-1">
+                {onTogglePin && (
+                  <button type="button" onClick={onTogglePin} aria-pressed={isPinned}
+                    aria-label={isPinned ? '取消固定侧栏' : '固定侧栏'} title={isPinned ? '取消固定侧栏' : '固定侧栏'}
+                    className="quiet-button rounded-md p-2"
+                    style={{ backgroundColor: isPinned ? 'var(--theme-selection)' : 'transparent' }}>
+                    <Pin size={16} aria-hidden="true" />
+                  </button>
+                )}
+                <button type="button" onClick={() => setIsOpen(false)} aria-label="关闭时间与标签侧栏" className="quiet-button rounded-md p-2"><X size={16} /></button>
+              </div>
             </div>
 
             {/* 动态透视容器：时间轴 vs 标签透视 */}
@@ -529,10 +539,10 @@ export const TimelineSidebar: React.FC<{
                 {viewMode === 'timeline' ? (
                   <motion.div
                     key="timeline"
-                    initial={{ opacity: 0, filter: 'blur(4px)' }}
-                    animate={{ opacity: 1, filter: 'blur(0px)' }}
-                    exit={{ opacity: 0, filter: 'blur(4px)' }}
-                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    initial={reduceMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className={`absolute inset-0 overflow-y-auto pl-12 pr-12 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
                     onScroll={() => {
                       setIsScrolling(true);
@@ -561,9 +571,9 @@ export const TimelineSidebar: React.FC<{
                             </svg>
                           </button>
                         </div>
-                        {rangeDocs && rangeDocs.length === 0 ? (
-                          <div className="text-[13px] mt-10 px-8 opacity-50" style={{ color: 'var(--theme-text)' }}>
-                            正在加载…
+                        {rangeLoading || rangeError || !rangeDocs?.length ? (
+                          <div role="status" className="text-[13px] mt-10 px-8 opacity-50" style={{ color: 'var(--theme-text)' }}>
+                            {rangeLoading ? '正在加载…' : rangeError ?? '这个区间还没有笔记'}
                           </div>
                         ) : rangeDocs ? (
                         <div className="relative pl-8 pr-4">
@@ -582,7 +592,7 @@ export const TimelineSidebar: React.FC<{
                               <div
                                 onClick={() => onDateClick?.(doc.date)}
                                 title="点击跳转到该天的日记"
-                                className="text-[10px] font-mono tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer w-fit"
+                                className="text-xs font-mono tracking-wide opacity-80 hover:opacity-100 transition-opacity cursor-pointer w-fit"
                                 style={{ color: 'var(--theme-text)' }}
                               >
                                 {doc.date}
@@ -641,7 +651,7 @@ export const TimelineSidebar: React.FC<{
                             <div
                               onClick={() => onDateClick?.(record.date)}
                               title="点击跳转到该天的日记"
-                              className="text-[10px] font-mono tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer w-fit"
+                              className="text-xs font-mono tracking-wide opacity-80 hover:opacity-100 transition-opacity cursor-pointer w-fit"
                               style={{ color: 'var(--theme-text)' }}
                             >
                               {record.date}
@@ -658,7 +668,7 @@ export const TimelineSidebar: React.FC<{
                                         style={{ color: 'var(--theme-text)' }}
                                         title={`查看 #${tag} 的全部记录`}
                                       >
-                                        #{tag} <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-sans">→</span>
+                                        #{tag} <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-sans">→</span>
                                       </div>
                                       <div className="space-y-4">
                                         {(() => {
@@ -708,10 +718,10 @@ export const TimelineSidebar: React.FC<{
                 ) : viewMode === 'all-tags' ? (
                   <motion.div
                     key="all-tags"
-                    initial={{ opacity: 0, filter: 'blur(4px)' }}
-                    animate={{ opacity: 1, filter: 'blur(0px)' }}
-                    exit={{ opacity: 0, filter: 'blur(4px)' }}
-                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    initial={reduceMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className={`absolute inset-0 overflow-y-auto px-8 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
                     onScroll={() => {
                       setIsScrolling(true);
@@ -728,7 +738,7 @@ export const TimelineSidebar: React.FC<{
                           style={{ borderColor: 'rgba(150, 150, 150, 0.06)' }}
                         >
                           <span className="text-[13px] tracking-widest transition-opacity opacity-80 group-hover:opacity-100" style={{ color: 'var(--theme-text)' }}>#{t}</span>
-                          <span className="text-[10px] font-mono opacity-30 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--theme-muted)' }}>{count}</span>
+                          <span className="text-xs font-mono opacity-30 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--theme-muted)' }}>{count}</span>
                         </button>
                       ))}
                       {tagFrequencies.length === 0 && (
@@ -739,10 +749,10 @@ export const TimelineSidebar: React.FC<{
                 ) : (
                   <motion.div
                     key="tag-perspective"
-                    initial={{ opacity: 0, filter: 'blur(4px)' }}
-                    animate={{ opacity: 1, filter: 'blur(0px)' }}
-                    exit={{ opacity: 0, filter: 'blur(4px)' }}
-                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    initial={reduceMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className="absolute inset-0"
                   >
                     {activeTag && (

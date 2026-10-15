@@ -13,7 +13,7 @@ coverage/
 # =========================
 src-tauri/target/
 src-tauri/**/*.rs.bk
-Cargo.lock
+# Desktop app dependencies are pinned in src-tauri/Cargo.lock.
 # Tauri dev logs / build metadata
 src-tauri/.tauri*
 

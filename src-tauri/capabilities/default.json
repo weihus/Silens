@@ -10,6 +10,8 @@
     "core:path:default",
     "dialog:allow-message",
     "dialog:allow-save",
+    "dialog:allow-open",
+    "core:window:allow-destroy",
     "fs:allow-write-file",
     {
       "identifier": "fs:scope",

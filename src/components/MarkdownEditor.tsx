@@ -2,7 +2,7 @@ import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Paragraph from '@tiptap/extension-paragraph';
 import { Markdown } from 'tiptap-markdown';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Extension } from '@tiptap/core';
 import { Plugin, TextSelection } from '@tiptap/pm/state';
 import type { Theme } from '../types';
@@ -86,6 +86,9 @@ export function MarkdownEditor({
   isFocusMode,
   knownTags,
 }: MarkdownEditorProps) {
+  const composingRef = useRef(false);
+  const compositionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popupId = useId();
   const [isReveal, setIsReveal] = useState(false);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
@@ -139,13 +142,7 @@ export function MarkdownEditor({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        // 1. 彻底禁用无用的富文本语法，将 # 完全释放给幽灵标签
-        heading: false,
-        blockquote: false,
-        codeBlock: false,
-        code: false,
-        horizontalRule: false,
-        strike: false,
+        // Keep imported Markdown structure; input rules are configured below.
         paragraph: false, // 卸载原生段落行为
       }),
       CustomParagraph,
@@ -159,6 +156,7 @@ export function MarkdownEditor({
       FocusSentenceExtension,
       ForceStartFocus,
     ],
+    enableInputRules: ['bold', 'italic', 'bulletList', 'orderedList'],
     content: initialContent,
     autofocus: 'start',
     editorProps: {
@@ -168,6 +166,9 @@ export function MarkdownEditor({
         return !suspendTypewriterRef.current;
       },
       attributes: {
+        role: 'textbox',
+        'aria-label': '笔记正文',
+        'aria-multiline': 'true',
         // Typography System: 纯粹的系统无衬线、固定 19px、1.9 行高、0 段距、禁用标题干扰
         class: `prose ${theme === 'night' ? 'prose-invert' : 'prose-slate'} max-w-none focus:outline-none text-[17px] leading-[1.9] tracking-[0.03em] prose-p:my-0 prose-a:no-underline prose-strong:font-semibold min-h-[50vh]`,
       },
@@ -175,10 +176,6 @@ export function MarkdownEditor({
     onUpdate: ({ editor }) => {
       onTyping();
       const markdown = (editor.storage as any).markdown.getMarkdown();
-      if (/<[^>]+>/.test(markdown)) {
-        console.error('Security Alert: HTML tags detected in Markdown output. Saving blocked.');
-        return;
-      }
       onChange(markdown);
     },
   });
@@ -212,8 +209,13 @@ export function MarkdownEditor({
   }, []);
 
   const updateTagContext = useCallback(() => {
-    if (!editor) return;
+    if (!editor || composingRef.current || editor.view.composing) return;
     const { state, view } = editor;
+    if (!state.selection.empty || !state.selection.$head.parent.isTextblock) {
+      setTagOpen(false);
+      setLinkOpen(false);
+      return;
+    }
     const $head = state.selection.$head;
     const blockFrom = $head.start();
     const beforeText = state.doc.textBetween(blockFrom, $head.pos, '\n', '\n');
@@ -258,7 +260,7 @@ export function MarkdownEditor({
 
     const q = query.trim();
     const res = tagFuse.search(q).slice(0, 6).map((r) => r.item.t);
-    setTagItems(res.length ? res : knownTags.slice(0, 6));
+    setTagItems(res);
     setTagActiveIndex(0);
     setTagOpen(true);
   }, [editor, knownTags, posAtTextOffset, tagFuse]);
@@ -292,8 +294,13 @@ export function MarkdownEditor({
   }, []);
 
   const updateLinkContext = useCallback(() => {
-    if (!editor) return;
+    if (!editor || composingRef.current || editor.view.composing) return;
     const { state, view } = editor;
+    if (!state.selection.empty || !state.selection.$head.parent.isTextblock) {
+      setTagOpen(false);
+      setLinkOpen(false);
+      return;
+    }
     const $head = state.selection.$head;
     const blockFrom = $head.start();
     const beforeText = state.doc.textBetween(blockFrom, $head.pos, '\n', '\n');
@@ -349,7 +356,7 @@ export function MarkdownEditor({
       }
     }
 
-    setLinkItems(results.length > 0 ? results : allDocNames.slice(0, 6));
+    setLinkItems(q ? results : allDocNames.slice(0, 6));
     setLinkActiveIndex(0);
     setLinkOpen(true);
   }, [editor, allDocNames, posAtTextOffset]);
@@ -365,23 +372,41 @@ export function MarkdownEditor({
     };
   }, [editor, updateLinkContext]);
 
-  const applyLink = useCallback((docName: string) => {
+  useEffect(() => () => {
+    if (compositionTimerRef.current) clearTimeout(compositionTimerRef.current);
+  }, []);
+
+  useEffect(() => {
     if (!editor) return;
+    const kind = tagOpen && tagItems.length ? 'tag' : linkOpen && linkItems.length ? 'link' : null;
+    const dom = editor.view.dom;
+    dom.setAttribute('aria-autocomplete', 'list');
+    if (kind) {
+      dom.setAttribute('aria-controls', `${popupId}-${kind}`);
+      dom.setAttribute('aria-activedescendant', `${popupId}-${kind}-${kind === 'tag' ? tagActiveIndex : linkActiveIndex}`);
+    } else {
+      dom.removeAttribute('aria-controls');
+      dom.removeAttribute('aria-activedescendant');
+    }
+  }, [editor, popupId, tagOpen, tagItems, tagActiveIndex, linkOpen, linkItems, linkActiveIndex]);
+
+  const applyLink = useCallback((docName: string) => {
+    if (!editor || composingRef.current || editor.view.composing) return;
     const r = linkRangeRef.current;
     if (!r) return;
-    editor.chain().focus().insertContentAt({ from: r.from, to: r.to }, `[[${docName}]] `).run();
+    editor.chain().focus().insertContentAt({ from: r.from, to: r.to }, { type: 'text', text: `[[${docName}]] ` }).run();
     setLinkOpen(false);
     linkRangeRef.current = null;
   }, [editor]);
 
   const applyTag = useCallback((tag: string) => {
-    if (!editor) return;
+    if (!editor || composingRef.current || editor.view.composing) return;
     const r = tagRangeRef.current;
     if (!r) return;
     editor
       .chain()
       .focus()
-      .insertContentAt({ from: r.from, to: r.to }, `#${tag} `)
+      .insertContentAt({ from: r.from, to: r.to }, { type: 'text', text: `#${tag} ` })
       .run();
     setTagOpen(false);
     setTagQuery('');
@@ -486,7 +511,32 @@ export function MarkdownEditor({
         };
         window.addEventListener('mouseup', onUp);
       }}
+      onCompositionStartCapture={() => {
+        if (compositionTimerRef.current) clearTimeout(compositionTimerRef.current);
+        composingRef.current = true;
+        setTagOpen(false);
+        setLinkOpen(false);
+      }}
+      onCompositionEndCapture={() => {
+        // Let ProseMirror commit the final composition transaction first.
+        compositionTimerRef.current = setTimeout(() => {
+          composingRef.current = false;
+          updateTagContext();
+          updateLinkContext();
+        }, 0);
+      }}
       onKeyDownCapture={(e) => {
+        if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || editor?.view.composing) {
+          e.stopPropagation();
+          return;
+        }
+        if (e.key === 'Escape' && (tagOpen || linkOpen)) {
+          e.preventDefault();
+          e.stopPropagation();
+          setTagOpen(false);
+          setLinkOpen(false);
+          return;
+        }
         if (tagOpen) {
           if (e.key === 'ArrowDown') {
             e.preventDefault();
@@ -554,12 +604,15 @@ export function MarkdownEditor({
         setIsReveal(false);
       }}
     >
-      {icebreakerText && (
+      {icebreakerText && editor?.isEmpty && (
         <Icebreaker text={icebreakerText} evaporating={icebreakerEvap} />
       )}
 
       {tagOpen && tagPos && tagItems.length > 0 && (
         <div
+          id={`${popupId}-tag`}
+          role="listbox"
+          aria-label="标签建议"
           className="absolute z-50"
           style={{ left: tagPos.left, top: tagPos.top }}
         >
@@ -572,6 +625,11 @@ export function MarkdownEditor({
             {tagItems.map((t, idx) => (
               <button
                 key={t}
+                id={`${popupId}-tag-${idx}`}
+                role="option"
+                aria-selected={idx === tagActiveIndex}
+                tabIndex={-1}
+                onClick={() => applyTag(t)}
                 type="button"
                 onMouseDown={(ev) => {
                   ev.preventDefault();
@@ -591,6 +649,9 @@ export function MarkdownEditor({
 
       {linkOpen && linkPos && linkItems.length > 0 && (
         <div
+          id={`${popupId}-link`}
+          role="listbox"
+          aria-label="笔记链接建议"
           className="absolute z-50"
           style={{ left: linkPos.left, top: linkPos.top }}
         >
@@ -603,6 +664,11 @@ export function MarkdownEditor({
             {linkItems.map((doc, idx) => (
               <button
                 key={doc}
+                id={`${popupId}-link-${idx}`}
+                role="option"
+                aria-selected={idx === linkActiveIndex}
+                tabIndex={-1}
+                onClick={() => applyLink(doc)}
                 type="button"
                 onMouseDown={(ev) => {
                   ev.preventDefault();

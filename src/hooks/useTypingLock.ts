@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 export function useTypingLock() {
   const [isTyping, setIsTyping] = useState(false);
@@ -9,7 +9,11 @@ export function useTypingLock() {
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(() => {
       setIsTyping(false);
-    }, 1000);
+    }, 2200);
+  }, []);
+
+  useEffect(() => () => {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
   }, []);
 
   const isIdle = !isTyping;

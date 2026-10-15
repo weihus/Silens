@@ -4,6 +4,75 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, atomic::{AtomicU64, Ordering}};
+
+#[derive(Default)]
+struct StorageLock(Mutex<()>);
+
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+fn unique_suffix() -> String {
+    format!("{}-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed))
+}
+
+fn document_filename(current: Option<&str>, today: &str) -> Result<String, String> {
+    let name = current.map(str::to_owned).unwrap_or_else(|| format!("{}.md", today));
+    if name.starts_with('.') || !name.ends_with(".md") || name.len() <= 3
+        || name.chars().any(|c| c.is_control() || "/\\:<>\"|?*".contains(c))
+        || Path::new(&name).components().count() != 1
+    {
+        return Err("INVALID_FILENAME: expected a single non-hidden .md filename".into());
+    }
+    Ok(name)
+}
+
+fn read_document(path: &Path) -> Result<String, String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.is_file() => return Err("DOCUMENT_READ_ERROR: not a regular file".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("DOCUMENT_NOT_FOUND".into()),
+        Err(e) => return Err(format!("DOCUMENT_READ_ERROR: {}", e)),
+        _ => {}
+    }
+    fs::read_to_string(path).map_err(|e| format!("DOCUMENT_READ_ERROR: {}", e))
+}
+
+fn check_expected(path: &Path, expected: Option<&str>) -> Result<(), String> {
+    match read_document(path) {
+        Ok(actual) if expected == Some(actual.as_str()) => Ok(()),
+        Ok(_) => Err("DOCUMENT_CONFLICT: on-disk content differs (or expectedContent is missing)".into()),
+        Err(e) if e == "DOCUMENT_NOT_FOUND" && expected.is_none() => Ok(()),
+        Err(e) if e == "DOCUMENT_NOT_FOUND" => Err("DOCUMENT_CONFLICT: document was removed".into()),
+        Err(e) => Err(e),
+    }
+}
+
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
+    atomic_write_checked(path, content, None)
+}
+
+fn atomic_write_checked(path: &Path, content: &[u8], expected: Option<Option<&str>>) -> Result<(), String> {
+    let temp = path.with_file_name(format!(".silens-{}.tmp", unique_suffix()));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp)
+            .map_err(|e| format!("WRITE_ERROR: {}", e))?;
+        file.write_all(content).and_then(|_| file.sync_all()).map_err(|e| format!("WRITE_ERROR: {}", e))?;
+        if let Some(expected) = expected { check_expected(path, expected)?; }
+        fs::rename(&temp, path).map_err(|e| format!("WRITE_ERROR: {}", e))
+    })();
+    if result.is_err() { let _ = fs::remove_file(&temp); }
+    result
+}
+
+fn save_note(dir: &Path, filename: &str, content: &str, expected: Option<&str>) -> Result<(), String> {
+    document_filename(Some(filename), "")?;
+    let path = dir.join(filename);
+    check_expected(&path, expected)?;
+    atomic_write_checked(&path, content.as_bytes(), Some(expected))
+}
 use tauri::Manager;
 use walkdir::WalkDir;
 
@@ -15,20 +84,19 @@ pub struct Document {
     modified: i64,
 }
 
-// 获取当前激活的存储路径（支持异常检测与优雅降级）
-fn get_active_workspace(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+// Never silently redirect a configured workspace to another directory.
+fn get_active_workspace(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let docs_dir = app.path().document_dir().map_err(|e| e.to_string())?;
-    let default_dir = docs_dir.join("Silens_Notes");
-    let config_path = docs_dir.join(".silens_workspace");
-
-    if let Ok(custom_path) = fs::read_to_string(&config_path) {
-        let path = std::path::PathBuf::from(custom_path.trim()).join("Silens_Notes");
-        // 异常检测：如果自定义路径挂了或被云盘释放，优雅降级回默认路径
-        if path.is_dir() {
-            return Ok(path);
-        }
+    let path = match fs::read_to_string(docs_dir.join(".silens_workspace")) {
+        Ok(custom) if !custom.trim().is_empty() => PathBuf::from(custom.trim()).join("Silens_Notes"),
+        Ok(_) => return Err("WORKSPACE_UNAVAILABLE: empty workspace configuration".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => docs_dir.join("Silens_Notes"),
+        Err(e) => return Err(format!("WORKSPACE_UNAVAILABLE: {}", e)),
+    };
+    if !path.is_dir() {
+        return Err(format!("WORKSPACE_UNAVAILABLE: {}", path.display()));
     }
-    Ok(default_dir)
+    Ok(path)
 }
 
 #[tauri::command]
@@ -39,49 +107,45 @@ fn get_storage_path(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn change_storage_path(app: tauri::AppHandle, new_path: String) -> Result<String, String> {
-    let docs_dir = app.path().document_dir().map_err(|e| e.to_string())?;
-    let config_path = docs_dir.join(".silens_workspace");
-    
-    let target_dir = std::path::PathBuf::from(&new_path).join("Silens_Notes");
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建目录: {}", e))?;
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    let source = get_active_workspace(&app)?;
+    let parent = Path::new(new_path.trim());
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Err("WORKSPACE_UNAVAILABLE: select an existing absolute directory".into());
     }
-    
-    fs::write(&config_path, new_path.trim()).map_err(|e| format!("写入配置失败: {}", e))?;
+    let target_dir = parent.join("Silens_Notes");
+    fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let target_dir = fs::canonicalize(target_dir).map_err(|e| e.to_string())?;
+    let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
+    if target_dir == source { return Ok(target_dir.to_string_lossy().into_owned()); }
+    if target_dir.starts_with(&source) || source.starts_with(&target_dir) {
+        return Err("WORKSPACE_CONFLICT: nested workspaces are not supported".into());
+    }
+    copy_workspace(&source, &target_dir, true)?;
+    // Build the target's local index before committing the workspace configuration.
+    rebuild_index_for_workspace(&app, &target_dir)?;
+    let config_path = app.path().document_dir().map_err(|e| e.to_string())?.join(".silens_workspace");
+    atomic_write(&config_path, parent.to_string_lossy().as_bytes())?;
     Ok(target_dir.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 fn save_document(
     app: tauri::AppHandle,
     content: String,
-    _current_filename: Option<String>,
+    current_filename: Option<String>,
+    expected_content: Option<String>,
 ) -> Result<String, String> {
-    // 1. Get storage directory (Cloud or Local)
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let target_dir = get_active_workspace(&app)?;
-
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建目录: {}", e))?;
-    }
-
-    // 2. Determine filename: strictly YYYY-MM-DD.md
-    let date = Local::now().format("%Y-%m-%d").to_string();
-    let filename = format!("{}.md", date);
-
-    let file_path = target_dir.join(&filename);
-    let tmp_path = target_dir.join(format!("{}.tmp", filename));
-
-    // 3. Write logic: UTF-8 no BOM
-    fs::write(&tmp_path, content.as_bytes())
-        .map_err(|e| format!("临时文件写入失败: {}", e))?;
-
-    fs::rename(&tmp_path, &file_path).map_err(|e| format!("保存失败 (重命名异常): {}", e))?;
-
-    // 4. 静默更新暗影索引 (Shadow Index)
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let filename = document_filename(current_filename.as_deref(), &today)?;
+    save_note(&target_dir, &filename, &content, expected_content.as_deref())?;
     if let Ok(conn) = get_db_connection(&app) {
-        let _ = index_document(&conn, &date, &content);
+        let _ = index_document(&conn, filename.trim_end_matches(".md"), &content);
     }
-
     Ok(filename)
 }
 
@@ -91,24 +155,14 @@ fn save_file_as(
     content: String,
     filename: String,
 ) -> Result<(), String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let target_dir = get_active_workspace(&app)?;
-
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建目录: {}", e))?;
+    let filename = if filename.ends_with(".md") { filename } else { format!("{}.md", filename) };
+    save_note(&target_dir, &filename, &content, None)?;
+    if let Ok(conn) = get_db_connection(&app) {
+        let _ = index_document(&conn, filename.trim_end_matches(".md"), &content);
     }
-
-    let clean_filename = filename
-        .trim_end_matches(".md")
-        .to_string();
-    let file_path = target_dir.join(format!("{}.md", clean_filename));
-    let tmp_path = target_dir.join(format!("{}.tmp", clean_filename));
-
-    fs::write(&tmp_path, content.as_bytes())
-        .map_err(|e| format!("文件写入失败: {}", e))?;
-
-    fs::rename(&tmp_path, &file_path)
-        .map_err(|e| format!("保存失败: {}", e))?;
-
     Ok(())
 }
 
@@ -171,13 +225,8 @@ async fn get_all_documents(app: tauri::AppHandle) -> Result<Vec<Document>, Strin
 #[tauri::command]
 async fn load_document(app: tauri::AppHandle, filename: String) -> Result<String, String> {
     let target_dir = get_active_workspace(&app)?;
-    let file_path = target_dir.join(filename);
-
-    if !file_path.exists() {
-        return Err("文档不存在".to_string());
-    }
-
-    fs::read_to_string(file_path).map_err(|e| format!("无法读取文档: {}", e))
+    let filename = document_filename(Some(&filename), "")?;
+    read_document(&target_dir.join(filename))
 }
 
 fn is_tag_boundary(c: char) -> bool {
@@ -286,7 +335,7 @@ fn update_tag_in_documents(
         let next_content = replace_tag_in_content(&content, from, to);
 
         if next_content != content {
-            fs::write(path, next_content.as_bytes()).map_err(|e| format!("写入文件失败: {}", e))?;
+            atomic_write_checked(path, next_content.as_bytes(), Some(Some(&content)))?;
             updated_files.push(filename);
         }
     }
@@ -321,7 +370,7 @@ fn delete_tag_from_documents(app: tauri::AppHandle, tag: &str) -> Result<Vec<Str
         let next_content = remove_tag_from_content(&content, tag);
 
         if next_content != content {
-            fs::write(path, next_content.as_bytes()).map_err(|e| format!("写入文件失败: {}", e))?;
+            atomic_write_checked(path, next_content.as_bytes(), Some(Some(&content)))?;
             updated_files.push(filename);
         }
     }
@@ -334,7 +383,9 @@ fn rename_tag(app: tauri::AppHandle, from: String, to: String) -> Result<Vec<Str
     if from.trim().is_empty() || to.trim().is_empty() {
         return Err("标签不能为空".to_string());
     }
-    update_tag_in_documents(app, &from, &to)
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    update_tag_in_documents(app.clone(), &from, &to)
 }
 
 #[tauri::command]
@@ -342,7 +393,9 @@ fn delete_tag(app: tauri::AppHandle, tag: String) -> Result<Vec<String>, String>
     if tag.trim().is_empty() {
         return Err("标签不能为空".to_string());
     }
-    delete_tag_from_documents(app, &tag)
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    delete_tag_from_documents(app.clone(), &tag)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -403,13 +456,17 @@ async fn get_timeline_data(app: tauri::AppHandle) -> Result<Vec<DayRecord>, Stri
 }
 
 fn get_db_connection(app: &tauri::AppHandle) -> Result<rusqlite::Connection, String> {
-    let target_dir = get_active_workspace(app)?;
+    open_workspace_index(app, &get_active_workspace(app)?)
+}
 
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
-    }
-
-    let db_path = target_dir.join(".shadow_index.db");
+fn open_workspace_index(app: &tauri::AppHandle, workspace: &Path) -> Result<rusqlite::Connection, String> {
+    use std::hash::{Hash, Hasher};
+    let workspace = fs::canonicalize(workspace).map_err(|e| e.to_string())?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    workspace.hash(&mut hash);
+    let local_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("indexes");
+    fs::create_dir_all(&local_dir).map_err(|e| e.to_string())?;
+    let db_path = local_dir.join(format!("{:016x}.db", hash.finish()));
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
 
     // 开启外键约束，以支持 block 删除时级联删除关系表
@@ -590,22 +647,9 @@ async fn query_blocks_by_tag(app: tauri::AppHandle, tag: String) -> Result<Vec<S
 
 #[tauri::command]
 async fn rebuild_shadow_index(app: tauri::AppHandle) -> Result<String, String> {
-    let conn = get_db_connection(&app)?;
-    
-    // 重建前先清空索引数据
-    conn.execute("DELETE FROM blocks", []).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM tags", []).map_err(|e| e.to_string())?;
-
-    let documents = get_all_documents(app.clone()).await?;
-    let mut count = 0;
-
-    for doc in documents {
-        let date = doc.filename.replace(".md", "");
-        if index_document(&conn, &date, &doc.content).is_ok() {
-            count += 1;
-        }
-    }
-
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    let count = rebuild_index_for_workspace(&app, &get_active_workspace(&app)?)?;
     Ok(format!("成功重建 {} 篇文档的暗影索引", count))
 }
 
@@ -706,65 +750,119 @@ async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<Search
     Ok(results)
 }
 
-// 核心备份逻辑：静默克隆整个工作区到 Silens_Backups 目录
+// Refuse links and propagate traversal errors rather than publishing incomplete data.
+fn workspace_files(source: &Path, markdown_only: bool) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    for entry in WalkDir::new(source).into_iter().filter_entry(|entry| {
+        let name = entry.file_name().to_string_lossy();
+        entry.depth() == 0 || !(name.starts_with(".shadow_index") || name.ends_with(".tmp"))
+    }) {
+        let entry = entry.map_err(|e| format!("COPY_ERROR: {}", e))?;
+        if entry.file_type().is_symlink() {
+            return Err(format!("COPY_ERROR: symbolic link {}", entry.path().display()));
+        }
+        if entry.file_type().is_file() && (!markdown_only || entry.path().extension().is_some_and(|e| e == "md")) {
+            files.push(entry.path().to_owned());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn copy_workspace(source: &Path, target: &Path, markdown_only: bool) -> Result<(), String> {
+    let files = workspace_files(source, markdown_only)?;
+    for path in &files {
+        let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
+        let bytes = fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))?;
+        // Check every existing component to prevent writing through target symlinks.
+        let relative = dest.strip_prefix(target).map_err(|e| e.to_string())?;
+        let mut component_path = target.to_owned();
+        for component in relative.components() {
+            component_path.push(component);
+            match fs::symlink_metadata(&component_path) {
+                Ok(meta) if meta.file_type().is_symlink() => return Err("COPY_CONFLICT: target contains a symbolic link".into()),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("COPY_ERROR: {}", e)),
+                _ => {}
+            }
+        }
+        if dest.exists() {
+            if fs::read(&dest).map_err(|e| format!("COPY_ERROR: {}", e))? != bytes {
+                return Err(format!("COPY_CONFLICT: {}", dest.display()));
+            }
+        } else {
+            fs::create_dir_all(dest.parent().unwrap()).map_err(|e| format!("COPY_ERROR: {}", e))?;
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&dest)
+                .map_err(|e| format!("COPY_ERROR: {}", e))?;
+            file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| format!("COPY_ERROR: {}", e))?;
+        }
+        if fs::read(&dest).map_err(|e| e.to_string())? != bytes
+            || fs::read(path).map_err(|e| e.to_string())? != bytes {
+            return Err("COPY_ERROR: verification failed or source changed".into());
+        }
+    }
+    for path in &files {
+        let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
+        if fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))?
+            != fs::read(dest).map_err(|e| format!("COPY_ERROR: {}", e))? {
+            return Err("COPY_ERROR: source changed during copy".into());
+        }
+    }
+    if workspace_files(source, markdown_only)? != files {
+        return Err("COPY_ERROR: source file set changed".into());
+    }
+    Ok(())
+}
+
+fn rebuild_index_for_workspace(app: &tauri::AppHandle, workspace: &Path) -> Result<usize, String> {
+    let mut conn = open_workspace_index(app, workspace)?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM blocks", []).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM tags", []).map_err(|e| e.to_string())?;
+    let files = workspace_files(workspace, true)?;
+    for path in &files {
+        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let stem = path.file_stem().and_then(|s| s.to_str()).ok_or("INVALID_FILENAME")?;
+        index_document(&tx, stem, &content)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(files.len())
+}
+
+fn snapshot_workspace(source: &Path, backups: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(backups).map_err(|e| e.to_string())?;
+    let name = format!("{}_{}", Local::now().format("%Y-%m-%d_%H-%M-%S"), unique_suffix());
+    let stage = backups.join(format!(".incomplete-{}", name));
+    let published = backups.join(name);
+    fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    // Leave a failed stage hidden for inspection; never run retention on failure.
+    copy_workspace(source, &stage, false)?;
+    fs::rename(&stage, &published).map_err(|e| e.to_string())?;
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(backups).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let valid_date = name.get(..19).is_some_and(|s|
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d_%H-%M-%S").is_ok());
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() && valid_date
+            && (name.len() == 19 || name.as_bytes().get(19) == Some(&b'_')) {
+            snapshots.push(entry.path());
+        }
+    }
+    snapshots.sort_by(|a, b| b.cmp(a));
+    for old in snapshots.into_iter().skip(10) {
+        // A retention failure does not invalidate a successfully published snapshot.
+        if let Err(e) = fs::remove_dir_all(&old) { log::warn!("Backup retention failed: {}", e); }
+    }
+    Ok(published)
+}
+
+// Snapshots are local and are published only after a verified copy.
 fn perform_backup(app: &tauri::AppHandle) -> Result<String, String> {
-    let source_dir = get_active_workspace(app)?;
-    // 双保险机制：备份快照永远写死在本地 Documents 目录，不随工作区前往云盘
-    let docs_dir = app.path().document_dir().map_err(|e| e.to_string())?;
-    let backups_base_dir = docs_dir.join("Silens_Backups");
-
-    if !source_dir.exists() {
-        return Err("源目录不存在".into());
-    }
-
-    // 将备份统一放在 Documents/Silens_Backups/YYYY-MM-DD_HH-MM-SS
-    let date_str = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let dest_dir = backups_base_dir.join(date_str);
-
-    if !dest_dir.exists() {
-        fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    }
-
-    // 递归复制所有文件（含 .md 和 SQLite .db 索引）
-    for entry in WalkDir::new(&source_dir).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if let Ok(relative) = path.strip_prefix(&source_dir) {
-            let target_path = dest_dir.join(relative);
-            if path.is_dir() {
-                let _ = fs::create_dir_all(&target_path);
-            } else if path.is_file() {
-                let _ = fs::copy(path, &target_path);
-            }
-        }
-    }
-    
-    // --- 新增：清理历史快照，仅保留最近 10 份 ---
-    let max_keep = 10;
-    if let Ok(entries) = fs::read_dir(&backups_base_dir) {
-        let mut backup_dirs = Vec::new();
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_dir() {
-                // 简单的目录名校验，判断是否是我们生成的 YYYY-MM-DD_HH-MM-SS
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.len() == 19 && name.contains('_') && name.contains('-') {
-                        backup_dirs.push(path);
-                    }
-                }
-            }
-        }
-        // 倒序排列，日期最新的排在最前
-        backup_dirs.sort_by(|a, b| b.cmp(a));
-        
-        // 删除超出数量的历史旧快照
-        if backup_dirs.len() > max_keep {
-            for old_dir in backup_dirs.into_iter().skip(max_keep) {
-                let _ = fs::remove_dir_all(old_dir);
-            }
-        }
-    }
-
-    Ok(dest_dir.to_string_lossy().into_owned())
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    let source = get_active_workspace(app)?;
+    let backups = app.path().document_dir().map_err(|e| e.to_string())?.join("Silens_Backups");
+    Ok(snapshot_workspace(&source, &backups)?.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -776,16 +874,24 @@ fn open_backups_folder(app: tauri::AppHandle) -> Result<(), String> {
         return Err("备份文件夹尚未创建".to_string());
     }
 
+    open_folder(&backups_dir)
+}
+
+fn open_folder(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(&backups_dir).spawn();
-    
+    let opener = "explorer";
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&backups_dir).spawn();
-    
+    let opener = "open";
     #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(&backups_dir).spawn();
-    
+    let opener = "xdg-open";
+    std::process::Command::new(opener).arg(path).spawn()
+        .map_err(|e| format!("OPEN_FOLDER_ERROR: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+fn open_storage_folder(app: tauri::AppHandle) -> Result<(), String> {
+    open_folder(&get_active_workspace(&app)?)
 }
 
 #[tauri::command]
@@ -796,6 +902,79 @@ async fn create_backup(app: tauri::AppHandle) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("silens-test-{}", unique_suffix()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn filename_selection_and_validation() {
+        assert_eq!(document_filename(None, "2026-10-15").unwrap(), "2026-10-15.md");
+        assert_eq!(document_filename(Some("2020-01-01.md"), "2026-10-15").unwrap(), "2020-01-01.md");
+        for name in ["", "../escape.md", "/absolute.md", "a/b.md", "a\\b.md", ".hidden.md", "note.txt", "C:note.md", "bad\n.md"] {
+            assert!(document_filename(Some(name), "").is_err(), "{}", name);
+        }
+    }
+
+    #[test]
+    fn conflicts_preserve_external_text_and_allow_empty_save() {
+        let dir = TempDir::new();
+        save_note(&dir.0, "old.md", "original", None).unwrap();
+        fs::write(dir.0.join("old.md"), "external").unwrap();
+        for expected in [None, Some("original")] {
+            assert!(save_note(&dir.0, "old.md", "replacement", expected).unwrap_err().starts_with("DOCUMENT_CONFLICT"));
+            assert_eq!(fs::read_to_string(dir.0.join("old.md")).unwrap(), "external");
+        }
+        save_note(&dir.0, "old.md", "", Some("external")).unwrap();
+        assert_eq!(read_document(&dir.0.join("old.md")).unwrap(), "");
+        assert_eq!(read_document(&dir.0.join("missing.md")).unwrap_err(), "DOCUMENT_NOT_FOUND");
+        assert!(save_note(&dir.0, "missing.md", "text", Some("")).unwrap_err().starts_with("DOCUMENT_CONFLICT"));
+    }
+
+    #[test]
+    fn failed_copy_preserves_source_and_conflicting_target() {
+        let source = TempDir::new();
+        let target = TempDir::new();
+        fs::write(source.0.join("note.md"), "source").unwrap();
+        fs::write(target.0.join("note.md"), "target").unwrap();
+        assert!(copy_workspace(&source.0, &target.0, true).is_err());
+        assert_eq!(fs::read_to_string(source.0.join("note.md")).unwrap(), "source");
+        assert_eq!(fs::read_to_string(target.0.join("note.md")).unwrap(), "target");
+        let blocked = target.0.join("blocked");
+        fs::write(&blocked, "not a directory").unwrap();
+        assert!(copy_workspace(&source.0, &blocked, true).is_err());
+        assert_eq!(fs::read_to_string(source.0.join("note.md")).unwrap(), "source");
+    }
+
+    #[test]
+    fn snapshots_publish_only_on_success_and_omit_cache() {
+        let source = TempDir::new();
+        let backups = TempDir::new();
+        for day in 1..=11 {
+            fs::create_dir(backups.0.join(format!("2020-01-{:02}_00-00-00", day))).unwrap();
+        }
+        assert!(snapshot_workspace(&source.0.join("missing"), &backups.0).is_err());
+        for day in 1..=11 {
+            assert!(backups.0.join(format!("2020-01-{:02}_00-00-00", day)).is_dir());
+        }
+        fs::write(source.0.join("note.md"), "note").unwrap();
+        fs::write(source.0.join(".shadow_index.db"), "cache").unwrap();
+        fs::write(source.0.join("note.md.tmp"), "partial").unwrap();
+        let published = snapshot_workspace(&source.0, &backups.0).unwrap();
+        assert_eq!(fs::read_to_string(published.join("note.md")).unwrap(), "note");
+        assert!(!published.join(".shadow_index.db").exists());
+        assert!(!published.join("note.md.tmp").exists());
+        assert!(!backups.0.join("2020-01-01_00-00-00").exists());
+        assert!(backups.0.join("2020-01-03_00-00-00").exists());
+    }
 
     #[test]
     fn test_document_serialization() {
@@ -812,6 +991,7 @@ mod tests {
 
 fn main() {
     tauri::Builder::default()
+        .manage(StorageLock::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -829,6 +1009,7 @@ fn main() {
             get_storage_path,
             change_storage_path,
             open_backups_folder,
+            open_storage_folder,
             save_file_as
         ])
         .setup(|app| {
@@ -838,6 +1019,23 @@ fn main() {
                     .build(),
             )?;
             
+            // Only initialize the default workspace on first launch; later disappearance is an error.
+            let local = app.path().app_local_data_dir()?;
+            fs::create_dir_all(&local)?;
+            let marker = local.join("workspace-initialized");
+            let docs = app.path().document_dir()?;
+            if !marker.try_exists()? {
+                if !docs.join(".silens_workspace").try_exists()? {
+                    fs::create_dir_all(docs.join("Silens_Notes"))?;
+                }
+                fs::write(&marker, b"1")?;
+            }
+            if let Ok(workspace) = get_active_workspace(app.handle()) {
+                if let Err(e) = rebuild_index_for_workspace(app.handle(), &workspace) {
+                    log::warn!("Index rebuild failed: {}", e);
+                }
+            }
+
             // 静默开启后台定时备份线程（每 6 小时自动备份一次）
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -848,13 +1046,6 @@ fn main() {
             });
 
             Ok(())
-        })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { .. } => {
-                // 拦截窗口关闭请求，执行最后一次静默安全备份后再退出
-                let _ = perform_backup(window.app_handle());
-            }
-            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
