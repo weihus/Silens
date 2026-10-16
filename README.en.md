@@ -1,4 +1,8 @@
-# Silens
+<p align="center">
+  <img src="public/favicon.svg" alt="Silens icon: a sage-green S with a sprouting leaf" width="128" height="128" />
+</p>
+
+<h1 align="center">Silens</h1>
 
 <div align="center">
   <strong>语言 / Language</strong>：
