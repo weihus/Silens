@@ -1,4 +1,8 @@
-# Silens (息壤) 📝
+<p align="center">
+  <img src="public/favicon.svg" alt="Silens 息壤图标：灰绿色 S 形笔画与嫩芽" width="128" height="128" />
+</p>
+
+<h1 align="center">Silens · 息壤</h1>
 
 <div align="center">
   <strong>语言 / Language</strong>：
