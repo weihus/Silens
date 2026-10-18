@@ -11,7 +11,7 @@
 
 Silens 是一款基于 [Tauri](https://tauri.app/) 构建的本地优先 Markdown 写作工具，以温暖的纸张配色和轻柔的界面，提供打开即写的专注空间。
 
-[产品介绍页源码与预览入口](website/index.html) · [下载安装包](https://github.com/weihus/Silens/releases/latest)
+[产品介绍页源码与预览入口](https://weihus.github.io/Silens/) · [下载安装包](https://github.com/weihus/Silens/releases/latest)
 
 ## 应用内更新
 
