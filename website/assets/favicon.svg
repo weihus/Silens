@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>Silens · 息壤</title>
+  <defs>
+    <linearGradient id="paper" x1="192" y1="96" x2="832" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAF8F5"/>
+      <stop offset="1" stop-color="#EDE9E0"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="396" y1="340" x2="628" y2="728" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#718474"/>
+      <stop offset="1" stop-color="#465D50"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#paper)"/>
+  <rect x="65" y="65" width="894" height="894" rx="207" stroke="#343C38" stroke-opacity=".08" stroke-width="2"/>
+  <path d="M624 378C589 347 551 336 505 340C441 346 396 385 397 435C398 486 450 507 514 527C582 548 631 575 628 629C625 690 568 725 503 723C452 722 405 702 373 670" stroke="url(#ink)" stroke-width="78" stroke-linecap="round"/>
+  <path d="M593 309C594 255 632 219 711 216C709 282 669 320 611 320C603 320 597 316 593 309Z" fill="#8D9D7C"/>
+</svg>

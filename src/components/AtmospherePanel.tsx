@@ -9,6 +9,7 @@ interface AtmospherePanelProps {
   panelBtnRef: React.RefObject<HTMLButtonElement | null>;
   onToggle: () => void;
   onExport: () => void;
+  onCheckUpdates?: () => void;
   onOpenStorage?: () => void;
   onOpenBackups?: () => void;
   onBackup?: () => void;
@@ -25,7 +26,7 @@ interface AtmospherePanelProps {
 export function AtmospherePanel({
   open, ref, onToggle, themeConfig, activeTheme, atmosphere, onChange,
   focusDuration, onFocusDurationChange, onExport, onOpenStorage, onOpenBackups,
-  onBackup, onMoveWorkspace, storageBusy,
+  onBackup, onMoveWorkspace, storageBusy, onCheckUpdates,
 }: AtmospherePanelProps) {
   const titleId = useId();
   const dialogRef = useDialogFocus(open, onToggle);
@@ -111,6 +112,7 @@ export function AtmospherePanel({
           <p className="leading-relaxed mt-2">迁移后，原文件仍会保留。备份保存在备份文件夹中，如需恢复，请手动复制文件。</p>
         </div>
       </details>
+      <button type="button" onClick={onCheckUpdates} disabled={storageBusy || !onCheckUpdates} className="quiet-button rounded-md px-2 py-2 text-left text-xs disabled:opacity-50">检查软件更新</button>
     </div>
   );
 }

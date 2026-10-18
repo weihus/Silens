@@ -26,6 +26,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -36,6 +37,13 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIxMUEwQjY4RjlDOEE0MkMKUldRc3BNajVhQXNhSWQxZ3dka0M4d3VKY0RxQWF3aUx6MWx2dDhiSWZKbUxaNE9qbS81TVNhSEQK",
+      "endpoints": ["https://github.com/weihus/Silens/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

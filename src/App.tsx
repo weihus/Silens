@@ -6,6 +6,7 @@ import { MotionConfig } from 'framer-motion';
 import { Canvas } from './components/Canvas';
 import { CommandPalette } from './components/CommandPalette';
 import { AtmospherePanel } from './components/AtmospherePanel';
+import { UpdateManager } from './components/UpdateManager';
 import { ExportDialog } from './components/ExportDialog';
 import { Editor } from '@tiptap/react';
 import type { AtmosphereState, Theme } from './types';
@@ -106,36 +107,38 @@ export default function App() {
   const [tagsRev, setTagsRev] = useState(0);
   const [targetSearchText, setTargetSearchText] = useState<string | null>(null);
   const [exportOpen, setExportOpenState] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
-  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy });
-  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy };
+  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen });
+  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen };
   const setPaletteOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen) return;
+    if (state.exportOpen || state.updateOpen) return;
     const next = typeof value === 'function' ? value(state.paletteOpen) : value;
     setPaletteOpenState(next);
     if (next) setPanelOpenState(false);
   }, [setPanelOpenState]);
   const setPanelOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen) return;
+    if (state.exportOpen || state.updateOpen) return;
     const next = typeof value === 'function' ? value(state.panelOpen) : value;
     setPanelOpenState(next);
     if (next) setPaletteOpenState(false);
   }, [setPanelOpenState]);
   const setSidebarOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen) return;
+    if (state.exportOpen || state.updateOpen) return;
     const next = typeof value === 'function' ? value(state.sidebarOpen) : value;
     setSidebarOpenState(next);
     if (next) { setPaletteOpenState(false); setPanelOpenState(false); }
   }, [setPanelOpenState]);
   const setExportOpen = useCallback((open: boolean) => {
-    if (overlays.current.exportBusy) return;
+    if (overlays.current.exportBusy || overlays.current.updateOpen) return;
     setExportOpenState(open);
     if (open) { setPaletteOpenState(false); setPanelOpenState(false); }
   }, [setPanelOpenState]);
-  const dialogOpen = paletteOpen || panelOpen || exportOpen;
+  const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen;
   const visibleSidebar = sidebarOpen && !dialogOpen;
   // 区间日记浏览模式：加载区间内所有日记，侧边栏展示朋友圈式时间流
   const [rangeDocs, setRangeDocs] = useState<{ date: string; content: string }[]>([]);
@@ -164,15 +167,15 @@ export default function App() {
     if (editor) void openDocument(todayKey() + '.md', true);
   }, [editor, openDocument]);
 
-  const closeState = useRef({ loading: true, storageBusy: false });
-  closeState.current = { loading, storageBusy };
+  const closeState = useRef({ loading: true, storageBusy: false, updateBusy: false });
+  closeState.current = { loading, storageBusy, updateBusy };
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async event => {
       event.preventDefault();
-      if (closing.current || closeState.current.loading || closeState.current.storageBusy) return;
+      if (closing.current || closeState.current.loading || closeState.current.storageBusy || closeState.current.updateBusy) return;
       closing.current = true;
       setStorageBusy(true);
       try {
@@ -239,7 +242,7 @@ export default function App() {
     sidebarOpen, setSidebarOpen, sidebarPinned, setSidebarPinned,
     panelOpen, setPanelOpen,
     toggleFocusMode,
-    exportOpen || storageBusy,
+    exportOpen || storageBusy || updateOpen,
   );
 
   // Tag click event listener
@@ -542,7 +545,7 @@ export default function App() {
           onTyping={handleTyping}
           onMouseMove={() => {}}
           onChange={changeText}
-          disabled={loading || storageBusy || !currentFilename}
+          disabled={loading || storageBusy || updateBusy || !currentFilename}
           onEditorReady={setEditor}
           isFocusMode={isFocusMode}
           knownTags={knownTags}
@@ -630,6 +633,7 @@ export default function App() {
         panelBtnRef={panelBtnRef}
         onToggle={() => setPanelOpen(prev => !prev)}
         onExport={() => setExportOpen(true)}
+        onCheckUpdates={() => { setPanelOpenState(false); setUpdateOpen(true); }}
         atmosphere={atmosphere}
         onChange={handleAtmosphereChange}
         themeConfig={themeConfig}
@@ -648,6 +652,15 @@ export default function App() {
           setTagsRev(n => n + 1);
           setToast('笔记已迁移，原文件仍保留');
         }); }}
+      />
+
+      <UpdateManager
+        open={updateOpen}
+        onOpenChange={setUpdateOpen}
+        canNotify={isIdle && !dialogOpen && !storageBusy && !loading && !isFocusMode}
+        blocked={storageBusy || loading}
+        onBusyChange={setUpdateBusy}
+        prepareToInstall={async () => { await flush(); await invoke('create_backup'); }}
       />
 
       {/* Export dialog */}

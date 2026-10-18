@@ -11,6 +11,23 @@
 
 Silens is a local-first Markdown writing tool built on [Tauri](https://tauri.app/), with a warm paper palette and a gentle interface for focused writing.
 
+[Product website source](website/index.html) · [Download Silens](https://github.com/weihus/Silens/releases/latest)
+
+## In-app updates
+
+Open “书写氛围 → 检查软件更新” to check the version and release notes, then choose to download, install, and restart. Background checks run 10 seconds after launch and every four hours; notices appear while idle, outside focus mode and other dialogs. Downloads require confirmation. Installation proceeds only after saving and backing up notes. Signed packages are verified before installation; update checks do not upload notes.
+
+Older releases need one manual upgrade to gain this feature. Linux in-app updates apply to AppImage; DEB installations still require a manual package download.
+
+Before publishing, configure the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY` with the private key matching the public key in `src-tauri/tauri.conf.json`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if applicable. Back up the private key securely and never commit it. The release tag and versions in `package.json`, `Cargo.toml`, and the Tauri config must agree. The release workflow generates `latest.json` after collecting signed artifacts for all three platforms.
+
+## Product website
+
+`website/` is a standalone static site with actual interface screenshots using sample notes, theme previews, and platform downloads. Preview with `python3 -m http.server 4174 --directory website`. Downloads resolve the latest official GitHub Release, with a release-page fallback if the API is unavailable.
+
+Set repository Settings → Pages → Source to **GitHub Actions** to enable deployment through `website.yml`. The workflow deployment result provides the published URL.
+
+
 ## v1.1.0
 
 This minor release focuses on dependable saving and a quieter writing experience while retaining the existing Markdown note format. See the [changelog](CHANGELOG.md) and [Chinese user manual](MANUAL.md).
