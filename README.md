@@ -11,6 +11,23 @@
 
 Silens 是一款基于 [Tauri](https://tauri.app/) 构建的本地优先 Markdown 写作工具，以温暖的纸张配色和轻柔的界面，提供打开即写的专注空间。
 
+[产品介绍页源码与预览入口](website/index.html) · [下载安装包](https://github.com/weihus/Silens/releases/latest)
+
+## 应用内更新
+
+在“书写氛围 → 检查软件更新”中查看版本和更新说明，确认后下载安装并重启。应用启动 10 秒后及每 4 小时检查一次，在停笔、无其他弹窗且非专注模式时轻提示；不会自动下载安装。安装前必须保存笔记并创建备份，失败时保留应用和当前文字。更新包使用签名验证，检查更新不上传笔记。
+
+较早版本需要先手动安装一次支持更新的版本。Linux 应用内更新适用于 AppImage，DEB 用户仍需下载安装包。
+
+发布前需将与 `src-tauri/tauri.conf.json` 公钥配对的私钥配置到 GitHub Actions Secret `TAURI_SIGNING_PRIVATE_KEY`；如有密码，再设置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥应安全备份，禁止提交仓库。发布 tag、`package.json`、`Cargo.toml` 和 Tauri 版本必须一致，例如 `v1.2.0` 对应 `1.2.0`。流水线收齐三平台签名包后生成 `latest.json` 并一起发布。
+
+## 产品介绍页
+
+`website/` 为独立静态站点，包含实际界面的示例笔记截图、主题预览和各平台下载入口。运行 `python3 -m http.server 4174 --directory website` 后打开 `http://localhost:4174` 预览。下载按钮从官方 GitHub Releases 获取最新安装包；接口不可用时仍可进入 Release 页下载。
+
+GitHub 仓库的 Settings → Pages → Source 选择 **GitHub Actions** 后，推送 `website/` 改动会由 `website.yml` 部署。发布地址见该工作流的部署结果。
+
+
 ## v1.1.0 更新
 
 本次次版本更新聚焦可靠保存与安静的书写体验，继续使用原有 Markdown 笔记格式。详细变更见 [更新记录](CHANGELOG.md)，操作说明见 [使用手册](MANUAL.md)。
