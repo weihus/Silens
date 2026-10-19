@@ -96,6 +96,16 @@ it('does not classify programmatic content or selection changes as typing', () =
   expect(result.current.suspendTypewriterRef.current).toBe(false);
 });
 
+it('skips earlier code examples when navigating to a backlink occurrence', () => {
+  editor.commands.setContent('<pre><code>[[note]]</code></pre><p>Escaped [[note]]</p><p>Real [[note]] here</p>');
+  const consumed = vi.fn();
+  renderHook(() => useGhostHighlight(editor, { text: '[[note]]', occurrence: 2 }, consumed));
+  act(() => vi.advanceTimersByTime(50));
+  expect(editor.state.selection.$from.parent.textContent).toBe('Real [[note]] here');
+  expect(editor.state.selection.$from.parentOffset).toBe(5);
+  expect(consumed).toHaveBeenCalledOnce();
+});
+
 it('moves selection to the search target without native scrolling and keeps its highlight after consumption', () => {
   const consumed = vi.fn();
   const jump = vi.fn();

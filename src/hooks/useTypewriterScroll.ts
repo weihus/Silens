@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react';
 import type { Editor } from '@tiptap/react';
+import type { NoteTarget } from '../types';
 import { TextSelection } from '@tiptap/pm/state';
 import { useScrollSovereign } from './useScrollSovereign';
 
@@ -25,12 +26,12 @@ export function useTypewriterScroll(editor: Editor | null) {
 
 export function useGhostHighlight(
   editor: Editor | null,
-  targetSearchText: string | null,
+  targetSearchText: NoteTarget | null,
   onConsumed: () => void,
   jumpToPosition?: (pos: number) => void,
 ) {
   const consumedRef = useRef(onConsumed);
-  consumedRef.current = onConsumed;
+  useEffect(() => { consumedRef.current = onConsumed; }, [onConsumed]);
   const highlightRef = useRef<Element | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -44,13 +45,19 @@ export function useGhostHighlight(
     const id = window.setTimeout(() => {
       if (editor.isDestroyed) return;
       let target: number | null = null;
+      const needle = typeof targetSearchText === 'string' ? targetSearchText : targetSearchText.text;
+      let remaining = typeof targetSearchText === 'string' ? 0 : targetSearchText.occurrence;
       editor.state.doc.descendants((node, pos) => {
         if (target !== null) return false;
         if (!node.isTextblock) return true;
         // textBetween preserves offsets across marks and inline leaf nodes.
         const text = node.textBetween(0, node.content.size, '', '￼');
-        const offset = text.indexOf(targetSearchText);
-        if (offset !== -1) target = pos + 1 + offset;
+        let offset = text.indexOf(needle);
+        while (offset !== -1) {
+          if (remaining === 0) { target = pos + 1 + offset; break; }
+          remaining -= 1;
+          offset = text.indexOf(needle, offset + needle.length);
+        }
         return false;
       });
       if (target !== null) {

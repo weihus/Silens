@@ -9,7 +9,7 @@ import { AtmospherePanel } from './components/AtmospherePanel';
 import { UpdateManager } from './components/UpdateManager';
 import { ExportDialog } from './components/ExportDialog';
 import { Editor } from '@tiptap/react';
-import type { AtmosphereState, Theme } from './types';
+import type { AtmosphereState, NoteTarget, Theme } from './types';
 import { computeTagFrequency, loadTagsByDoc, updateDocTags } from './utils/tags';
 import { useDocumentSession } from './hooks/useDocumentSession';
 import { TimelineSidebar } from './components/TimelineSidebar';
@@ -105,7 +105,7 @@ export default function App() {
   const [storageError, setStorageError] = useState<string | null>(null);
   const closing = useRef(false);
   const [tagsRev, setTagsRev] = useState(0);
-  const [targetSearchText, setTargetSearchText] = useState<string | null>(null);
+  const [targetSearchText, setTargetSearchText] = useState<NoteTarget | null>(null);
   const [exportOpen, setExportOpenState] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -273,7 +273,7 @@ export default function App() {
 
   // === Document navigation helper ===
   // 成功切换返回目标日期字符串；失败（文件不存在）返回 null
-  const switchToDocument = useCallback(async (date: string, searchText?: string): Promise<{ date: string | null }> => {
+  const switchToDocument = useCallback(async (date: string, searchText?: NoteTarget): Promise<{ date: string | null }> => {
     if (storageBusy) return { date: null };
     const filename = date.endsWith('.md') ? date : `${date}.md`;
     const opened = await openDocument(filename, filename === `${todayKey()}.md`);
@@ -551,6 +551,9 @@ export default function App() {
           knownTags={knownTags}
           targetSearchText={targetSearchText}
           onConsumedTargetSearchText={() => setTargetSearchText(null)}
+          filename={currentFilename}
+          notesRevision={tagsRev}
+          onNavigate={(filename, searchText) => { void switchToDocument(filename, searchText); }}
         />
       </div>
 

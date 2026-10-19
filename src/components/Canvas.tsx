@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react';
-import type { Theme } from '../types';
+import type { NoteTarget, Theme } from '../types';
 import { MarkdownEditor } from './MarkdownEditor';
+import { Backlinks } from './Backlinks';
 import { Editor } from '@tiptap/react';
 
 interface CanvasProps {
@@ -12,13 +13,16 @@ interface CanvasProps {
   onEditorReady: (editor: Editor) => void;
   isFocusMode: boolean;
   knownTags: string[];
-  targetSearchText: string | null;
+  targetSearchText: NoteTarget | null;
   onConsumedTargetSearchText: () => void;
   isSidebarOpen?: boolean;
   disabled?: boolean;
+  filename: string | null;
+  notesRevision: number;
+  onNavigate: (filename: string, searchText: NoteTarget) => void;
 }
 
-export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false }: CanvasProps) {
+export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false, filename, notesRevision, onNavigate }: CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,6 +64,9 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
           targetSearchText={disabled ? null : targetSearchText}
           onConsumedTargetSearchText={onConsumedTargetSearchText}
         />
+        {!disabled && !isFocusMode && filename && (
+          <Backlinks key={filename} filename={filename} revision={notesRevision} onNavigate={onNavigate} />
+        )}
         <div style={{ height: '80vh' }} />
       </div>
       {disabled && (
