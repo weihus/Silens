@@ -8,7 +8,18 @@
       "Bash(perl *)",
       "Bash(grep *)",
       "Read(//private/tmp/**)",
-      "Bash(echo \"STATE: $\\(grep -E 'Running `target/debug/app`|error|panic|Missing' /tmp/tauri-dev5.log)"
+      "Bash(echo \"STATE: $\\(grep -E 'Running `target/debug/app`|error|panic|Missing' /tmp/tauri-dev5.log)",
+      "Bash(arch -arm64 /usr/bin/git -C . ls-remote origin v1.0.1)",
+      "Bash(arch -arm64 /usr/bin/git -C . ls-remote origin refs/tags/v1.0.1)",
+      "Bash(echo \"tag v1.0.1 present on origin: $\\(arch -arm64 /usr/bin/git -C . ls-remote origin refs/tags/v1.0.1\\)\")",
+      "Bash(arch -arm64 git diff --check)",
+      "Bash(arch -arm64 git diff --stat)",
+      "Bash(arch -arm64 git status --short)",
+      "Bash(npm run *)",
+      "Bash(node *)",
+      "Bash(/usr/bin/arch -arm64 /usr/bin/git diff --check)",
+      "Bash(/usr/bin/arch -arm64 /usr/bin/git status --short)",
+      "Bash(/usr/bin/arch -arm64 /usr/bin/git diff -- src-tauri/capabilities/default.json src/hooks/useThemeCSS.ts)"
     ]
   }
 }
