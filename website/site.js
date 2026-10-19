@@ -76,7 +76,7 @@ const recallDescriptions = {
   timeline: ['时间轴回顾', '侧栏按日期展示笔记内容'],
   tags: ['标签回顾', '同一标签下的内容块按日期排列'],
   search: ['搜索与上下文', '搜索结果旁展示相关段落预览'],
-  links: ['Wiki 链接补全', '输入双方括号后展示已有笔记候选'],
+  links: ['反向链接', '正文下方折叠显示引用来源与片段'],
 };
 for (const button of document.querySelectorAll('[data-recall]')) {
   button.addEventListener('click', () => {
