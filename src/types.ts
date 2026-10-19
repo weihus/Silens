@@ -1,5 +1,7 @@
 export type Theme = 'paper' | 'white' | 'night';
 
+export type NoteTarget = string | { text: string; occurrence: number };
+
 export type SoundPreset = 'none' | 'rain' | 'fire' | 'night';
 
 export interface AtmosphereState {

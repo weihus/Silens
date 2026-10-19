@@ -1,6 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backlinks;
+use backlinks::query_backlinks;
+
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -1008,6 +1011,7 @@ fn main() {
             create_backup,
             search_notes,
             search_docs_by_prefix,
+            query_backlinks,
             get_storage_path,
             change_storage_path,
             open_backups_folder,

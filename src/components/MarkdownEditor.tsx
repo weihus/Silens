@@ -5,7 +5,7 @@ import { Markdown } from 'tiptap-markdown';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Extension } from '@tiptap/core';
 import { Plugin, TextSelection } from '@tiptap/pm/state';
-import type { Theme } from '../types';
+import type { NoteTarget, Theme } from '../types';
 import Fuse from 'fuse.js';
 import { invoke } from '@tauri-apps/api/core';
 import { FocusSentenceExtension } from '../extensions/FocusSentenceExtension';
@@ -49,7 +49,7 @@ interface MarkdownEditorProps {
   onChange: (markdown: string) => void;
   onTyping: () => void;
   initialContent?: string;
-  targetSearchText: string | null;
+  targetSearchText: NoteTarget | null;
   onConsumedTargetSearchText: () => void;
   onEditorReady?: (editor: Editor) => void;
   isFocusMode: boolean;

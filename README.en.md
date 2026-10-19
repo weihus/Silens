@@ -50,7 +50,7 @@ Notes are stored as plain `.md` files, by default in `Documents/Silens_Notes`. T
 - [x] **Focus & ambient sound**: Typewriter scrolling, a focus timer, and Rain, Fire, and Night soundscapes.
 - [x] **Wiki links**: `[[document]]` completion and forward navigation, with prefix, substring, and fuzzy matching.
 - [x] **Snapshots & workspace migration**: Publish backups after verification; copy and verify notes during migration while retaining originals.
-- [ ] **Backlinks**: Show which notes reference the current document.
+- [x] **Backlinks**: A collapsed section below the note shows referring notes and context; click to return to a source. Hidden in focus mode.
 - [ ] **AI-assisted organization**: Future work only; processing or uploading notes must require explicit user opt-in.
 
 ## Tech Stack
@@ -68,7 +68,7 @@ The frontend and backend communicate through Tauri IPC:
 - **Explicit navigation**: The header shows the current note's date or filename, with a “Back to today” button when viewing older notes. Browse, search, and sidebar pinning have explicit buttons; key controls provide accessible names and visible keyboard focus.
 - **Markdown editing**: Imported or opened Markdown retains headings and code structure. Typing `# ` does not automatically create a heading. Bold, italic, lists, and `#tags` are supported, with local indexing for browsing content blocks.
 - **Timeline & search**: Browse by date or tag. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. `Cmd/Ctrl + K` opens compact search; context previews appear with results and are hidden on narrow windows. A pinned sidebar returns after search closes.
-- **Wiki links**: Type `[[` to select a note and click a link to open its target. These are forward links; a backlinks list is not yet implemented.
+- **Wiki links & backlinks**: Type `[[` to select a note and click a link to open its target. When other notes refer to the current document, a collapsed section below the editor shows the number of referring notes. Expand it for source names and context; click to return to a source and attempt to locate the reference. Each source appears once; self-references and code examples are excluded. Hidden in focus mode. References are read from the current workspace files and refresh on opening, saving, or returning to the app.
 - **Atmosphere & export**: Settings include themes, ambient sound, volume, focus duration, and local file actions. Export supports Markdown, plain text, PNG, and JPG.
 
 ### 2. Saving, backups & recovery
