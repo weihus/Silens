@@ -773,6 +773,11 @@ fn workspace_files(source: &Path, markdown_only: bool) -> Result<Vec<PathBuf>, S
 }
 
 fn copy_workspace(source: &Path, target: &Path, markdown_only: bool) -> Result<(), String> {
+    copy_files(source, target, markdown_only, false)
+}
+
+// Restoring overwrites files that differ. Migration keeps the safer refusal.
+fn copy_files(source: &Path, target: &Path, markdown_only: bool, overwrite: bool) -> Result<(), String> {
     let files = workspace_files(source, markdown_only)?;
     for path in &files {
         let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
@@ -789,8 +794,10 @@ fn copy_workspace(source: &Path, target: &Path, markdown_only: bool) -> Result<(
             }
         }
         if dest.exists() {
-            if fs::read(&dest).map_err(|e| format!("COPY_ERROR: {}", e))? != bytes {
-                return Err(format!("COPY_CONFLICT: {}", dest.display()));
+            let current = fs::read(&dest).map_err(|e| format!("COPY_ERROR: {}", e))?;
+            if current != bytes {
+                if !overwrite { return Err(format!("COPY_CONFLICT: {}", dest.display())); }
+                atomic_write(&dest, &bytes)?;
             }
         } else {
             fs::create_dir_all(dest.parent().unwrap()).map_err(|e| format!("COPY_ERROR: {}", e))?;
@@ -840,7 +847,24 @@ fn snapshot_workspace(source: &Path, backups: &Path) -> Result<PathBuf, String> 
     // Leave a failed stage hidden for inspection; never run retention on failure.
     copy_workspace(source, &stage, false)?;
     fs::rename(&stage, &published).map_err(|e| e.to_string())?;
+    for old in snapshot_dirs(backups)?.into_iter().skip(10) {
+        // A retention failure does not invalidate a successfully published snapshot.
+        if let Err(e) = fs::remove_dir_all(&old) { log::warn!("Backup retention failed: {}", e); }
+    }
+    Ok(published)
+}
+
+#[derive(Serialize)]
+struct BackupSnapshot {
+    id: String,
+    created: String,
+    files: usize,
+}
+
+// Only directories named like a published snapshot are restorable.
+fn snapshot_dirs(backups: &Path) -> Result<Vec<PathBuf>, String> {
     let mut snapshots = Vec::new();
+    if !backups.exists() { return Ok(snapshots); }
     for entry in fs::read_dir(backups).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -852,11 +876,40 @@ fn snapshot_workspace(source: &Path, backups: &Path) -> Result<PathBuf, String> 
         }
     }
     snapshots.sort_by(|a, b| b.cmp(a));
-    for old in snapshots.into_iter().skip(10) {
-        // A retention failure does not invalidate a successfully published snapshot.
-        if let Err(e) = fs::remove_dir_all(&old) { log::warn!("Backup retention failed: {}", e); }
+    Ok(snapshots)
+}
+
+fn backups_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().document_dir().map_err(|e| e.to_string())?.join("Silens_Backups"))
+}
+
+// Newest first. Unfinished stages and anything not named like a snapshot are skipped.
+fn list_snapshots(backups: &Path) -> Result<Vec<BackupSnapshot>, String> {
+    snapshot_dirs(backups)?.into_iter().map(|path| {
+        let id = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+        let created = id.get(..19).unwrap_or("").replace('_', " ");
+        let files = workspace_files(&path, true)?.len();
+        Ok(BackupSnapshot { id, created, files })
+    }).collect()
+}
+
+// The current workspace is snapshotted first, so a restore can itself be undone.
+// Files absent from the snapshot are removed; the pre-restore snapshot keeps them.
+fn restore_snapshot(workspace: &Path, backups: &Path, id: &str) -> Result<(), String> {
+    let snapshot = backups.join(id);
+    if snapshot_dirs(backups)?.iter().all(|path| path != &snapshot) {
+        return Err("BACKUP_NOT_FOUND: 未找到这份备份".into());
     }
-    Ok(published)
+    snapshot_workspace(workspace, backups)?;
+    let incoming = workspace_files(&snapshot, false)?;
+    copy_files(&snapshot, workspace, false, true)?;
+    for path in workspace_files(workspace, false)? {
+        let relative = path.strip_prefix(workspace).map_err(|e| e.to_string())?;
+        if !incoming.iter().any(|kept| kept.strip_prefix(&snapshot).ok() == Some(relative)) {
+            fs::remove_file(&path).map_err(|e| format!("RESTORE_ERROR: {}", e))?;
+        }
+    }
+    Ok(())
 }
 
 // Snapshots are local and are published only after a verified copy.
@@ -864,8 +917,25 @@ fn perform_backup(app: &tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<StorageLock>();
     let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let source = get_active_workspace(app)?;
-    let backups = app.path().document_dir().map_err(|e| e.to_string())?.join("Silens_Backups");
-    Ok(snapshot_workspace(&source, &backups)?.to_string_lossy().into_owned())
+    Ok(snapshot_workspace(&source, &backups_dir(app)?)?.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn list_backups(app: tauri::AppHandle) -> Result<Vec<BackupSnapshot>, String> {
+    list_snapshots(&backups_dir(&app)?)
+}
+
+#[tauri::command]
+fn restore_backup(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    let workspace = get_active_workspace(&app)?;
+    let backups = backups_dir(&app)?;
+    restore_snapshot(&workspace, &backups, &id)?;
+    if let Err(e) = rebuild_index_for_workspace(&app, &workspace) {
+        log::warn!("Index rebuild after restore failed: {}", e);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -980,6 +1050,36 @@ mod tests {
     }
 
     #[test]
+    fn restore_replaces_workspace_and_keeps_a_snapshot_of_it() {
+        let workspace = TempDir::new();
+        let backups = TempDir::new();
+        fs::write(workspace.0.join("kept.md"), "current").unwrap();
+        fs::write(workspace.0.join("gone.md"), "removed by restore").unwrap();
+        let snapshot = backups.0.join("2020-01-02_00-00-00");
+        fs::create_dir(&snapshot).unwrap();
+        fs::write(snapshot.join("kept.md"), "restored").unwrap();
+        fs::write(snapshot.join("added.md"), "from snapshot").unwrap();
+        fs::create_dir(backups.0.join(".incomplete-2020-01-01_00-00-00")).unwrap();
+
+        let listed = list_snapshots(&backups.0).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].files, 2);
+
+        assert!(restore_snapshot(&workspace.0, &backups.0, "../escape").is_err());
+        assert_eq!(fs::read_to_string(workspace.0.join("kept.md")).unwrap(), "current");
+
+        restore_snapshot(&workspace.0, &backups.0, "2020-01-02_00-00-00").unwrap();
+        assert_eq!(fs::read_to_string(workspace.0.join("kept.md")).unwrap(), "restored");
+        assert_eq!(fs::read_to_string(workspace.0.join("added.md")).unwrap(), "from snapshot");
+        assert!(!workspace.0.join("gone.md").exists());
+        let safety = list_snapshots(&backups.0).unwrap().into_iter()
+            .find(|item| item.id != "2020-01-02_00-00-00").unwrap();
+        let safety_dir = backups.0.join(&safety.id);
+        assert_eq!(fs::read_to_string(safety_dir.join("gone.md")).unwrap(), "removed by restore");
+        assert_eq!(fs::read_to_string(safety_dir.join("kept.md")).unwrap(), "current");
+    }
+
+    #[test]
     fn test_document_serialization() {
         let doc = Document {
             filename: "test.md".into(),
@@ -1009,6 +1109,8 @@ fn main() {
             query_blocks_by_tag,
             rebuild_shadow_index,
             create_backup,
+            list_backups,
+            restore_backup,
             search_notes,
             search_docs_by_prefix,
             query_backlinks,

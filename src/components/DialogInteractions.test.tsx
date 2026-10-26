@@ -8,6 +8,7 @@ import { writeFile } from '@tauri-apps/plugin-fs';
 import { CommandPalette, type SearchResult } from './CommandPalette';
 import { ExportDialog } from './ExportDialog';
 import { AtmospherePanel } from './AtmospherePanel';
+import { RestoreDialog } from './RestoreDialog';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn() }));
@@ -167,4 +168,52 @@ it('composes the atmosphere ref without resetting focus on rerender', () => {
   expect(toggle).toHaveBeenCalledOnce();
   view.unmount();
   expect(ref.current).toBeNull();
+});
+
+it('lists snapshots and restores only after confirmation', async () => {
+  vi.mocked(invoke).mockImplementation(async (command: string) => {
+    if (command === 'list_backups') return [{ id: '2026-10-01_03-04-05', created: '2026-10-01 03-04-05', files: 3 }];
+    if (command === 'restore_backup') return null;
+    throw new Error(`unexpected ${command}`);
+  });
+  const restored = vi.fn();
+  const close = vi.fn();
+  render(<RestoreDialog open onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByText('2026-10-01 03-04-05')).toBeTruthy();
+  expect(screen.getByText(/3 篇/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '恢复' }));
+  expect(restored).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith('restore_backup', { id: '2026-10-01_03-04-05' });
+  expect(restored).toHaveBeenCalledWith('2026-10-01_03-04-05');
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it('keeps the dialog open and the notes untouched when restoring fails', async () => {
+  vi.mocked(invoke).mockImplementation(async (command: string) => {
+    if (command === 'list_backups') return [{ id: '2026-10-01_03-04-05', created: '2026-10-01 03-04-05', files: 1 }];
+    throw new Error('disk full');
+  });
+  const restored = vi.fn();
+  const close = vi.fn();
+  render(<RestoreDialog open onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  fireEvent.click(screen.getByRole('button', { name: '恢复' }));
+  fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByRole('alert')).toBeTruthy();
+  expect(restored).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+});
+
+it('offers restoring a backup from the local files section', () => {
+  const restore = vi.fn();
+  const ref = createRef<HTMLDivElement>();
+  render(<AtmospherePanel open ref={ref} panelBtnRef={createRef<HTMLButtonElement>()} onToggle={vi.fn()} onExport={vi.fn()} storageBusy={false} atmosphere={{ theme: 'paper', sound: 'none', volume: 0.5, autoSync: false }} onChange={vi.fn()} themeConfig={themeConfig} activeTheme="paper" focusDuration={25} onFocusDurationChange={vi.fn()} onRestore={restore} />);
+  fireEvent.click(screen.getByText('本地文件'));
+  fireEvent.click(screen.getByRole('button', { name: '恢复备份' }));
+  expect(restore).toHaveBeenCalledOnce();
+  expect(screen.queryByText(/请手动复制文件/)).toBeNull();
 });

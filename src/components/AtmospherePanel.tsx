@@ -12,6 +12,7 @@ interface AtmospherePanelProps {
   onCheckUpdates?: () => void;
   onOpenStorage?: () => void;
   onOpenBackups?: () => void;
+  onRestore?: () => void;
   onBackup?: () => void;
   onMoveWorkspace?: () => void;
   storageBusy: boolean;
@@ -25,7 +26,7 @@ interface AtmospherePanelProps {
 
 export function AtmospherePanel({
   open, ref, onToggle, themeConfig, activeTheme, atmosphere, onChange,
-  focusDuration, onFocusDurationChange, onExport, onOpenStorage, onOpenBackups,
+  focusDuration, onFocusDurationChange, onExport, onOpenStorage, onOpenBackups, onRestore,
   onBackup, onMoveWorkspace, storageBusy, onCheckUpdates,
 }: AtmospherePanelProps) {
   const titleId = useId();
@@ -102,6 +103,7 @@ export function AtmospherePanel({
           {[
             { label: '打开笔记文件夹', action: onOpenStorage },
             { label: '备份副本', action: onBackup },
+            { label: '恢复备份', action: onRestore },
             { label: '查看备份', action: onOpenBackups },
             { label: '迁移工作区', action: onMoveWorkspace },
           ].map(({ label, action }) => (
@@ -109,7 +111,7 @@ export function AtmospherePanel({
               className="quiet-button text-left rounded-md px-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed">{label}</button>
           ))}
           {storageBusy && <p role="status" className="px-2 py-1">正在处理…</p>}
-          <p className="leading-relaxed mt-2">迁移后，原文件仍会保留。备份保存在备份文件夹中，如需恢复，请手动复制文件。</p>
+          <p className="leading-relaxed mt-2">迁移后，原文件仍会保留。恢复备份会先为当前笔记再存一份副本。</p>
         </div>
       </details>
       <button type="button" onClick={onCheckUpdates} disabled={storageBusy || !onCheckUpdates} className="quiet-button rounded-md px-2 py-2 text-left text-xs disabled:opacity-50">检查软件更新</button>

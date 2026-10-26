@@ -77,7 +77,7 @@ The frontend and backend communicate through Tauri IPC:
 - **Optimistic conflict checks**: Before saving, disk content is compared with the last loaded or saved content. Detected changes or deletion cause the overwrite to be refused. Writes use a temporary file followed by replacement; failures show an error and retain the text in the editor so you can export a copy. This is not a cross-process lock or concurrent-edit merge mechanism.
 - **Save and back up before closing**: Closing the window waits for pending saves, then creates a backup before closing. If saving or backup fails, the window stays open and displays an error.
 - **Local snapshots**: Snapshots are created every 6 hours while the app runs, before closing the window, or through the manual backup action. They are stored in `Documents/Silens_Backups`. Files are copied to a staging directory and verified before the snapshot is published. Successful publication triggers retention of the latest 10 snapshots; cleanup failures may leave more than 10. Failed copies or verification do not trigger removal of older backups.
-- **Manual recovery**: In the atmosphere panel, expand the local files section and choose the view-backups action to open the backup folder. Recovery requires manually selecting and copying files; there is no in-app restore interface.
+- **In-app restore**: Under "书写氛围 → 本地文件 → 恢复备份", snapshots are listed with their time and note count. Confirming restores the whole notes folder. The current notes are snapshotted first, so the same steps can return to the state before the restore; notes created after the chosen snapshot leave the folder but remain in that snapshot. "查看备份" still opens the backup folder.
 
 ### 3. Workspaces & cloud folders
 

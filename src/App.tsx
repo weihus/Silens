@@ -8,6 +8,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { AtmospherePanel } from './components/AtmospherePanel';
 import { UpdateManager } from './components/UpdateManager';
 import { ExportDialog } from './components/ExportDialog';
+import { RestoreDialog } from './components/RestoreDialog';
 import { Editor } from '@tiptap/react';
 import type { AtmosphereState, NoteTarget, Theme } from './types';
 import { computeTagFrequency, loadTagsByDoc, updateDocTags } from './utils/tags';
@@ -107,28 +108,29 @@ export default function App() {
   const [tagsRev, setTagsRev] = useState(0);
   const [targetSearchText, setTargetSearchText] = useState<NoteTarget | null>(null);
   const [exportOpen, setExportOpenState] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
-  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen });
-  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen };
+  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen });
+  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen };
   const setPaletteOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
     const next = typeof value === 'function' ? value(state.paletteOpen) : value;
     setPaletteOpenState(next);
     if (next) setPanelOpenState(false);
   }, [setPanelOpenState]);
   const setPanelOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
     const next = typeof value === 'function' ? value(state.panelOpen) : value;
     setPanelOpenState(next);
     if (next) setPaletteOpenState(false);
   }, [setPanelOpenState]);
   const setSidebarOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
     const next = typeof value === 'function' ? value(state.sidebarOpen) : value;
     setSidebarOpenState(next);
     if (next) { setPaletteOpenState(false); setPanelOpenState(false); }
@@ -138,7 +140,7 @@ export default function App() {
     setExportOpenState(open);
     if (open) { setPaletteOpenState(false); setPanelOpenState(false); }
   }, [setPanelOpenState]);
-  const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen;
+  const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen || restoreOpen;
   const visibleSidebar = sidebarOpen && !dialogOpen;
   // 区间日记浏览模式：加载区间内所有日记，侧边栏展示朋友圈式时间流
   const [rangeDocs, setRangeDocs] = useState<{ date: string; content: string }[]>([]);
@@ -646,6 +648,7 @@ export default function App() {
         storageBusy={storageBusy || loading}
         onOpenStorage={() => { void invoke('open_storage_folder').catch(cause => setStorageError(String(cause))); }}
         onOpenBackups={() => { void invoke('open_backups_folder').catch(cause => setStorageError(String(cause))); }}
+        onRestore={() => { setPanelOpenState(false); setRestoreOpen(true); }}
         onBackup={() => { void runStorageAction(async () => { await invoke('create_backup'); setToast('备份已保存'); }); }}
         onMoveWorkspace={() => { void runStorageAction(async () => {
           const selected = await openFolderDialog({ directory: true, multiple: false, title: '选择笔记文件夹的位置' });
@@ -667,6 +670,17 @@ export default function App() {
       />
 
       {/* Export dialog */}
+      <RestoreDialog
+        open={restoreOpen}
+        onClose={() => setRestoreOpen(false)}
+        onRestored={async () => {
+          await openDocument(currentFilename ?? `${todayKey()}.md`, true, 'reload');
+          setTagsRev(n => n + 1);
+          setToast('已恢复备份');
+        }}
+        theme={activeTheme as Theme}
+        themeConfig={themeConfig}
+      />
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpenState(false)}
