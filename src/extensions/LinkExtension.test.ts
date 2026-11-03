@@ -6,6 +6,16 @@ import { LinkExtension } from './LinkExtension';
 let editor: Editor;
 afterEach(() => editor?.destroy());
 
+it('keeps an alias linked to its stable filename and ignores code examples', () => {
+  editor = new Editor({
+    extensions: [StarterKit, LinkExtension],
+    content: '<p>[[article-123|一个问题]]</p><p><code>[[article-123]]</code></p><pre><code>[[article-123]]</code></pre>',
+  });
+  const links = editor.view.dom.querySelectorAll('.silens-link');
+  expect(links).toHaveLength(1);
+  expect(links[0].getAttribute('data-doc-name')).toBe('article-123');
+});
+
 it('renders real decorations at nested document positions and dispatches the clicked name safely', () => {
   const name = 'note " onclick="alert(1)<img src=x>';
   editor = new Editor({

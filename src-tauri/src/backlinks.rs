@@ -4,6 +4,7 @@ use std::{fs, path::Path};
 #[derive(Debug, Serialize)]
 pub struct Backlink {
     filename: String,
+    title: String,
     snippet: String,
     search_text: String,
     occurrence: usize,
@@ -19,7 +20,7 @@ fn first_reference(line: &str, filename: &str) -> Option<(usize, usize)> {
             let start = pos;
             pos += 2;
             let end = line[pos..].find(']').map(|offset| pos + offset)?;
-            let target = line[pos..end].trim();
+            let target = line[pos..end].split('|').next().unwrap_or("").trim();
             if !target.is_empty() && !target.contains('[') && bytes[end..].starts_with(b"]]") {
                 let normalized = if target.ends_with(".md") { target.to_string() } else { format!("{}.md", target) };
                 if normalized == filename { return Some((start, end + 2)); }
@@ -94,7 +95,7 @@ fn find_backlinks(workspace: &Path, filename: &str) -> Result<Vec<Backlink>, Str
             Err(e) => return Err(e.to_string()),
         };
         if let Some((snippet, search_text, occurrence)) = reference(&content, filename) {
-            result.push(Backlink { filename: name, snippet, search_text, occurrence });
+            result.push(Backlink { title: super::documents::title(&name, &content), filename: name, snippet, search_text, occurrence });
         }
     }
     result.sort_by(|a, b| b.filename.cmp(&a.filename));
@@ -130,7 +131,8 @@ mod tests {
         assert_eq!(locator, "[[ 灵感.md ]]");
         assert_eq!(snippet, "想法 [[ 灵感.md ]] 继续生长");
         assert!(reference("[[灵感]]", "灵感.md").is_some());
-        for text in ["[[灵感集]]", "[[灵感#标题]]", "[[灵感|别名]]", "[[ ]]", "[[[灵感]]]", "[灵感]", "[[灵感]"] {
+        assert!(reference("[[灵感|别名]]", "灵感.md").is_some());
+        for text in ["[[灵感集]]", "[[灵感#标题]]", "[[ ]]", "[[[灵感]]]", "[灵感]", "[[灵感]"] {
             assert!(reference(text, "灵感.md").is_none(), "{}", text);
         }
         assert!(reference("[[Case]]", "case.md").is_none());

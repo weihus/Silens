@@ -50,6 +50,33 @@ afterEach(() => {
 });
 
 describe('useDocumentSession', () => {
+  it('saves title and body together without changing the article identity', async () => {
+    const filename = 'article-123.md';
+    invokeMock.mockResolvedValueOnce('# 原题\n\n原文').mockResolvedValue(filename);
+    const { result, editor } = setup();
+    await act(async () => { await result.current.open(filename); });
+    expect(result.current.title).toBe('原题');
+    expect(applyMock).toHaveBeenCalledWith(editor, '原文');
+    act(() => result.current.changeTitle('新题'));
+    act(() => result.current.change('继续思考'));
+    await advanceSaveTimer();
+    expect(invokeMock).toHaveBeenLastCalledWith('save_document', {
+      content: '# 新题\n\n继续思考', currentFilename: filename, expectedContent: '# 原题\n\n原文',
+    });
+    expect(result.current.filename).toBe(filename);
+  });
+
+  it('preserves a title-only draft when saving fails during navigation', async () => {
+    invokeMock.mockRejectedValueOnce('DOCUMENT_NOT_FOUND').mockRejectedValueOnce('DOCUMENT_CONFLICT');
+    const { result } = setup();
+    await act(async () => { await result.current.open('article-new.md', true); });
+    act(() => result.current.changeTitle('只有标题'));
+    await act(async () => { expect(await result.current.open(destination, true)).toBe(false); });
+    expect(result.current.title).toBe('只有标题');
+    expect(result.current.filename).toBe('article-new.md');
+    expect(result.current.status).toBe('error');
+  });
+
   it('preserves a conflicted draft before reloading the same document', async () => {
     invokeMock.mockResolvedValueOnce('original');
     const { result } = setup();

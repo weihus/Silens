@@ -38,7 +38,8 @@
 .shortcut kbd { font-family: inherit; font-size: 10px; background: #eff0e9; border: 1px solid #dce1d5; border-radius: 4px; padding: 3px 5px; }
 .shortcut span { display: block; margin-top: 10px; font-size: 10px; }
 .feature-screenshot { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #faf8f5; box-shadow: 0 14px 45px -35px #3449344d; }
-.feature-screenshot img { width: 100%; }
+.feature-screenshot picture { display: block; }
+.feature-screenshot img { width: 100%; height: auto; }
 .feature-screenshot figcaption { padding: 13px 17px; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); line-height: 1.8; }
 .remember-section { padding-top: 115px; }
 .recall-layout { display: grid; grid-template-columns: .85fr 1.5fr; align-items: start; gap: 44px; margin-top: 45px; }
@@ -79,6 +80,7 @@
   .recall-options button>span:last-child { display: none; font-size: 11px; }
   .recall-options button[aria-pressed="true"]>span:last-child { display: block; }
   .recall-options button[aria-pressed="true"] { grid-row: span 3; }
+  #notes .feature-screenshot, .recall-preview { width: 100%; max-width: 430px; margin-inline: auto; }
   .recall-preview { position: static; }
   .atmosphere { padding-top: 75px; }
 }

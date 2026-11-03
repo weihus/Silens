@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { open as openFolderDialog } from '@tauri-apps/plugin-dialog';
 import { MotionConfig } from 'framer-motion';
 import { Canvas } from './components/Canvas';
@@ -21,6 +22,8 @@ import { useAtmospherePanel } from './hooks/useAtmospherePanel';
 import { useAudio } from './hooks/useAudio';
 import { useThemeCSS } from './hooks/useThemeCSS';
 import { decodeEmptyLines } from './utils/emptyLines';
+import { displayTitle, documentKind, parseDocument } from './utils/documents';
+import type { RecallDay, RecallRange } from './types';
 import { SlidersHorizontal, Columns, Search, ArrowLeft } from 'lucide-react';
 
 const themeConfigs: Record<Theme, { bg: string; text: string; muted: string }> = {
@@ -106,6 +109,7 @@ export default function App() {
   const [storageError, setStorageError] = useState<string | null>(null);
   const closing = useRef(false);
   const [tagsRev, setTagsRev] = useState(0);
+  const [forcedTag, setForcedTag] = useState<string | null>(null);
   const [targetSearchText, setTargetSearchText] = useState<NoteTarget | null>(null);
   const [exportOpen, setExportOpenState] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -142,8 +146,8 @@ export default function App() {
   }, [setPanelOpenState]);
   const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen || restoreOpen;
   const visibleSidebar = sidebarOpen && !dialogOpen;
-  // 区间日记浏览模式：加载区间内所有日记，侧边栏展示朋友圈式时间流
-  const [rangeDocs, setRangeDocs] = useState<{ date: string; content: string }[]>([]);
+  const [recallRange, setRecallRange] = useState<RecallRange | null>(null);
+  const [timeViewRequest, setTimeViewRequest] = useState(0);
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeError, setRangeError] = useState<string | null>(null);
@@ -152,15 +156,16 @@ export default function App() {
     if (!sidebarOpen || rangeLabel === null) {
       rangeRequest.current += 1;
       setRangeLoading(false);
+      if (rangeLabel === null) setRangeError(null);
     }
   }, [sidebarOpen, rangeLabel]);
 
   const onSaved = useCallback((filename: string, content: string) => {
-    updateDocTags(filename, content);
+    updateDocTags(filename, parseDocument(filename, content).body);
     setTagsRev(n => n + 1);
   }, []);
-  const { text, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
-    change: changeText, open: openDocument, flush } = useDocumentSession(editor, onSaved);
+  const { text, title, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
+    change: changeText, changeTitle, getContent, open: openDocument, flush } = useDocumentSession(editor, onSaved);
 
   useAudio(atmosphere.sound, atmosphere.volume);
   useThemeCSS(activeTheme as Theme);
@@ -195,6 +200,16 @@ export default function App() {
     return () => { disposed = true; unlisten?.(); };
   }, [flush]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen<string>('silens-index-warning', event => setStorageError(event.payload))
+      .then(unlisten => { if (disposed) unlisten(); else stop = unlisten; })
+      .catch(cause => console.error('Index notifications unavailable:', cause));
+    return () => { disposed = true; stop?.(); };
+  }, []);
+
   const runStorageAction = useCallback(async (action: () => Promise<unknown>) => {
     if (storageBusy || loading) return;
     setStorageBusy(true);
@@ -223,8 +238,6 @@ export default function App() {
   useEffect(() => {
     if (!dialogOpen || sidebarPinned) return;
     setSidebarOpenState(false);
-    setRangeDocs([]);
-    setRangeLabel(null);
   }, [dialogOpen, sidebarPinned]);
 
   useEffect(() => {
@@ -249,12 +262,13 @@ export default function App() {
 
   // Tag click event listener
   useEffect(() => {
-    const handler = (_e: any) => {
+    const handler = (event: Event) => {
+      setForcedTag((event as CustomEvent<{ tag: string }>).detail.tag);
       setSidebarOpen(true);
     };
     window.addEventListener('silens-tag-click', handler);
     return () => window.removeEventListener('silens-tag-click', handler);
-  }, []);
+  }, [setSidebarOpen]);
 
   // === Derived values ===
   const tagsByDoc = useMemo(() => loadTagsByDoc(), [tagsRev]);
@@ -266,12 +280,22 @@ export default function App() {
   }, [tagsByDoc]);
 
   const rawDisplay = decodeEmptyLines(text);
-  const charCount = rawDisplay.replace(/\s/g, '').length;
+  const charCount = (title + rawDisplay).replace(/\s/g, '').length;
+  const article = !!currentFilename && documentKind(currentFilename) === 'article';
+  const currentTitle = currentFilename ? displayTitle(currentFilename, article ? title : '') : '正在打开笔记';
   const headerBg = `${themeConfig.bg}ed`;
 
-  const handleExportContent = useCallback(() => {
-    return decodeEmptyLines(text);
-  }, [text]);
+  const handleExportContent = getContent;
+
+  const createArticle = useCallback(async () => {
+    if (storageBusy || loading) return;
+    if (!await openDocument(`article-${crypto.randomUUID()}.md`, true)) return;
+    setTargetSearchText(null);
+    setRecallRange(null);
+    setRangeLabel(null);
+    setPaletteOpen(false);
+    if (!sidebarPinned) setSidebarOpen(false);
+  }, [storageBusy, loading, openDocument, setPaletteOpen, sidebarPinned, setSidebarOpen]);
 
   // === Document navigation helper ===
   // 成功切换返回目标日期字符串；失败（文件不存在）返回 null
@@ -287,130 +311,47 @@ export default function App() {
     const handleLink = (event: Event) => {
       const docName = (event as CustomEvent<{ docName: string }>).detail.docName;
       if (storageBusy) return;
-      void openDocument(docName.endsWith('.md') ? docName : `${docName}.md`);
+      void switchToDocument(docName);
     };
     window.addEventListener('silens-link-click', handleLink);
     return () => window.removeEventListener('silens-link-click', handleLink);
-  }, [openDocument, storageBusy]);
+  }, [switchToDocument, storageBusy]);
 
-  // 定位到 [startKey, endKey] 区间内最新的日记；兼容带后缀文件名（YYYY-MM-DD_xxx.md）
-  const jumpToRange = useCallback(async (startKey: string, endKey: string): Promise<string | null> => {
+  const jumpToCustomRange = useCallback(async (start?: string, end?: string, label?: string) => {
+    if (!start && !end) return;
+    const request = ++rangeRequest.current;
+    const range = { start: start ?? '1970-01-01', end: end ?? todayKey() };
+    setRecallRange(range);
+    setRangeLabel(label ?? (start && end ? `${start} – ${end}` : start ? `${start} 至今` : `截至 ${end}`));
+    setRangeLoading(true);
+    setRangeError(null);
+    setSidebarOpen(true);
     try {
-      const data = await invoke<{ filename: string }[]>('get_all_documents');
-      const docNames = (data || []).map((d) => d.filename).filter((f: unknown): f is string =>
-        typeof f === 'string' && /^\d{4}-\d{2}-\d{2}(_|\.md$)/.test(f)
-      );
-      const inRange = docNames
-        .filter((f) => { const k = f.slice(0, 10); return k >= startKey && k <= endKey; })
-        .sort();
-      return inRange.length > 0 ? inRange[inRange.length - 1] : null;
-    } catch (err) {
-      console.error('区间查询失败:', err);
-      return null;
+      const days = await invoke<RecallDay[]>('get_timeline_data');
+      if (request !== rangeRequest.current) return;
+      const count = days.filter(day => day.date >= range.start && day.date <= range.end).length;
+      if (!count) setToast(label ? `${label}还没有笔记` : '这个区间还没有笔记');
+    } catch (cause) {
+      if (request !== rangeRequest.current) return;
+      console.error('加载创作时间范围失败:', cause);
+      setRangeError('暂时无法读取这个区间，请稍后重试');
+    } finally {
+      if (request === rangeRequest.current) setRangeLoading(false);
     }
-  }, []);
+  }, [setSidebarOpen, setToast]);
 
-  // 自定义日期区间穿梭：
-  // - 双边（start + end）→ 加载区间内全部日记并展示时间流（朋友圈式）
-  // - 单边 → 定位到该侧最新一篇日记并打开主编辑器
-  const jumpToCustomRange = useCallback(async (start?: string, end?: string) => {
-    if (start && end) {
-      const request = ++rangeRequest.current;
-      setRangeDocs([]);
-      setRangeLoading(true);
-      setRangeError(null);
-      // 双边：同步激活区间浏览模式（侧边栏时间流），主页保持当前文档不动。
-      // 固定侧边栏，防止 mouseleave / 面板互斥逻辑把刚打开的区间侧边栏关掉
-      setRangeLabel(`${start} – ${end}`);
-      setSidebarOpen(true);
-      setSidebarPinned(true);
-      try {
-        const data = await invoke<{ filename: string; content: string }[]>('get_all_documents');
-        const inRange = (data || [])
-          .filter((d) => {
-            const k = d.filename.slice(0, 10);
-            return /^\d{4}-\d{2}-\d{2}/.test(k) && k >= start && k <= end;
-          })
-          .sort((a, b) => a.filename.localeCompare(b.filename));
-        // 同一日期可能有多篇（带不同后缀），按日期归并
-        const merged: { date: string; content: string }[] = [];
-        for (const d of inRange) {
-          const date = d.filename.slice(0, 10);
-          const existing = merged.find((m) => m.date === date);
-          if (existing) existing.content += (existing.content ? '\n\n' : '') + d.content;
-          else merged.push({ date, content: d.content });
-        }
-        if (request !== rangeRequest.current) return;
-        setRangeDocs(merged);
-        setToast(merged.length > 0
-          ? `正在浏览 ${start} – ${end}，共 ${merged.length} 天`
-          : `${start} – ${end} 暂无记录`);
-      } catch (err) {
-        if (request !== rangeRequest.current) return;
-        console.error('加载区间日记失败:', err);
-        setRangeError('暂时无法读取这个区间，请稍后重试');
-      } finally {
-        if (request === rangeRequest.current) setRangeLoading(false);
-      }
+  const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month') => {
+    const today = todayKey();
+    if (preset === 'yesterday') {
+      await jumpToCustomRange(yesterdayKey(), yesterdayKey(), '昨天');
       return;
     }
-    // 单边：定位到该侧最新一篇日记
-    try {
-      let target: string | null = null;
-      if (start) {
-        target = await jumpToRange(start, todayKey());
-      } else if (end) {
-        target = await jumpToRange('1970-01-01', end);
-      }
-      if (target) {
-        const { date } = await switchToDocument(target);
-        setToast(date ? `已打开 ${date}` : `${target} 未能打开，当前页面保持不变`);
-      } else {
-        const rangeDesc = start ? `${start} 至今` : `截至 ${end}`;
-        setToast(`${rangeDesc} 暂无记录`);
-      }
-    } catch (err) {
-      console.error('区间穿梭失败:', err);
-      setToast('穿梭失败');
-    }
-  }, [jumpToRange, switchToDocument, setToast, todayKey]);
-
-  // 时间穿梭（昨天/本周/本月）：定位到范围内最新的日记
-  const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month') => {
-    try {
-      let target: string | null;
-      if (preset === 'yesterday') {
-        const yKey = yesterdayKey();
-        target = await jumpToRange(yKey, yKey);
-      } else {
-        const todayK = todayKey();
-        const startKey = preset === 'this-week'
-          ? (() => {
-              const now = new Date();
-              const day = now.getDay() || 7;
-              const monday = new Date(now);
-              monday.setDate(now.getDate() - day + 1);
-              return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
-            })()
-          : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
-        target = await jumpToRange(startKey, todayK);
-      }
-      if (!target) {
-        setToast(`${{ yesterday: '昨天', 'this-week': '本周', 'this-month': '本月' }[preset]}还没有笔记`);
-        return;
-      }
-
-      const { date } = await switchToDocument(target);
-      if (date) {
-        setToast(`已穿梭至 ${date}`);
-      } else {
-        setToast(`${target} 未能打开，当前页面保持不变`);
-      }
-    } catch (err) {
-      console.error('时间穿梭失败:', err);
-      setToast('穿梭失败');
-    }
-  }, [jumpToRange, switchToDocument, setToast]);
+    const now = new Date();
+    if (preset === 'this-week') now.setDate(now.getDate() - ((now.getDay() || 7) - 1));
+    else now.setDate(1);
+    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    await jumpToCustomRange(start, today, preset === 'this-week' ? '本周' : '本月');
+  }, [jumpToCustomRange]);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -514,7 +455,7 @@ export default function App() {
           SILENS
         </div>
         <div className="mt-2 flex items-center gap-3 text-xs" style={{ color: themeConfig.muted }}>
-          <span>{currentFilename ? currentFilename.replace(/\.md$/, '') : '正在打开笔记'}</span>
+          <span className="max-w-[45vw] truncate">{currentTitle}</span>
           {currentFilename && currentFilename !== `${todayKey()}.md` && (
             <button className="flex items-center gap-1 hover:opacity-70" onClick={() => { void switchToDocument(todayKey()); }}>
               <ArrowLeft size={12} /> 回到今天
@@ -532,12 +473,7 @@ export default function App() {
       <div
         className="h-full"
         onClick={() => {
-          // 点击主页面：退出区间浏览模式 + 收起未固定侧边栏
-          if (rangeLabel !== null || sidebarOpen) {
-            setRangeDocs([]);
-            setRangeLabel(null);
-            if (!sidebarPinned) { setSidebarPinned(false); setSidebarOpen(false); }
-          }
+          if (sidebarOpen && !sidebarPinned) setSidebarOpen(false);
         }}
       >
         <Canvas
@@ -547,6 +483,8 @@ export default function App() {
           onTyping={handleTyping}
           onMouseMove={() => {}}
           onChange={changeText}
+          title={title}
+          onTitleChange={changeTitle}
           disabled={loading || storageBusy || updateBusy || !currentFilename}
           onEditorReady={setEditor}
           isFocusMode={isFocusMode}
@@ -566,12 +504,12 @@ export default function App() {
         editor={editor}
         currentFilename={currentFilename}
         onTagManaged={() => setTagsRev(n => n + 1)}
-        onSelectResult={async (date, searchText) => {
-          await switchToDocument(date, searchText);
-          setPaletteOpen(false);
-        }}
+        onNewArticle={() => { void createArticle(); }}
+        onToday={async () => { if ((await switchToDocument(todayKey())).date) setPaletteOpen(false); }}
+        onSelectResult={async (date, searchText) => !!(await switchToDocument(date, searchText)).date}
         onQuickJump={async (preset, customRange) => {
           setPaletteOpen(false);
+          setTimeViewRequest(value => value + 1);
           if (customRange) {
             await jumpToCustomRange(customRange.start, customRange.end);
             return;
@@ -591,8 +529,10 @@ export default function App() {
           onTogglePin={() => setSidebarPinned(pinned => !pinned)}
           setIsOpen={open => { setSidebarOpen(open); if (!open) setSidebarPinned(false); }}
           isPaletteOpen={paletteOpen}
-          externalForceTag={undefined}
-          onClearForceTag={() => {}}
+          externalForceTag={forcedTag}
+          onClearForceTag={() => setForcedTag(null)}
+          onNewArticle={() => { void createArticle(); }}
+          currentFilename={currentFilename}
           tagsRev={tagsRev}
           theme={activeTheme}
           onBlockClick={(text) => {
@@ -600,31 +540,20 @@ export default function App() {
             if (!sidebarPinned) setSidebarOpen(false);
           }}
           onJumpTime={(preset, customRange) => {
-            // 双边区间 → 加载区间日记流（侧边栏时间流浏览，保持侧边栏打开）
-            // 单边 / preset → 定位单篇文档（收起未固定的侧边栏）
-            if (customRange) {
-              void jumpToCustomRange(customRange.start, customRange.end);
-            } else if (preset) {
-              void jumpToTimeRange(preset);
-            }
-            const isBoth = !!(customRange && customRange.start && customRange.end);
-            // 双边区间保持侧边栏打开；单边/preset 收起未固定的侧边栏
-            if (!isBoth && !sidebarPinned) setSidebarOpen(false);
+            if (customRange) void jumpToCustomRange(customRange.start, customRange.end);
+            else if (preset) void jumpToTimeRange(preset);
           }}
-          rangeDocs={rangeDocs}
+          recallRange={recallRange}
+          externalForceTime={timeViewRequest}
           rangeLoading={rangeLoading}
           rangeError={rangeError}
           rangeLabel={rangeLabel}
-          onClearRange={() => { setRangeDocs([]); setRangeLabel(null); setSidebarPinned(false); }}
+          onClearRange={() => { rangeRequest.current += 1; setRecallRange(null); setRangeLabel(null); setRangeError(null); setRangeLoading(false); }}
           onSelectResult={async (date, searchText) => {
-            await switchToDocument(date, searchText);
-            setRangeDocs([]);
-            setRangeLabel(null);
-            if (!sidebarPinned) { setSidebarPinned(false); setSidebarOpen(false); }
+            if (!(await switchToDocument(date, searchText)).date) return;
+            if (!sidebarPinned) setSidebarOpen(false);
           }}
           onDateClick={async (date) => {
-            setRangeDocs([]);
-            setRangeLabel(null);
             const { date: opened } = await switchToDocument(date);
             if (opened && !sidebarPinned) setSidebarOpen(false);
           }}
@@ -688,7 +617,8 @@ export default function App() {
         theme={activeTheme as Theme}
         themeConfig={themeConfig}
         exportContent={handleExportContent}
-        filename={currentFilename ?? ''}
+        filename={article ? `${currentTitle}.md` : currentFilename ?? ''}
+        title={article ? title : undefined}
       />
 
       {!dialogOpen && (saveError || storageError) && (

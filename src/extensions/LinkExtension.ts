@@ -37,9 +37,10 @@ export const LinkExtension = Extension.create({
 function getLinkDecorations(doc: Node): DecorationSet {
   const decos: Decoration[] = [];
   doc.descendants((node, pos) => {
-    if (!node.isText || !node.text) return;
+    if (node.type.spec.code) return false;
+    if (!node.isText || !node.text || node.marks.some(mark => mark.type.spec.code)) return;
     for (const match of node.text.matchAll(LINK_REGEX)) {
-      const docName = match[1].trim();
+      const docName = match[1].split('|')[0].trim();
       if (!docName) continue;
       const from = pos + match.index;
       decos.push(Decoration.inline(from, from + match[0].length, {

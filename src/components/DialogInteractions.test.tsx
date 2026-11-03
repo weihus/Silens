@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { toPng } from 'html-to-image';
 import { CommandPalette, type SearchResult } from './CommandPalette';
 import { ExportDialog } from './ExportDialog';
 import { AtmospherePanel } from './AtmospherePanel';
@@ -13,6 +14,7 @@ import { RestoreDialog } from './RestoreDialog';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn() }));
 vi.mock('@tauri-apps/plugin-fs', () => ({ writeFile: vi.fn() }));
+vi.mock('html-to-image', () => ({ toPng: vi.fn(), toJpeg: vi.fn() }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -152,6 +154,80 @@ it.each(['cancel', 'success', 'failure'] as const)('blocks dismissal and edits d
   expect(close).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
   fireEvent.keyDown(document, { key: 'Escape' });
   expect(close).toHaveBeenCalledTimes(outcome === 'success' ? 2 : 1);
+});
+
+it('keeps search open until navigation succeeds and preserves results on failure', async () => {
+  vi.mocked(invoke).mockResolvedValue([{ id: 'article', filename: 'article-123.md', title: '一个问题', date: 'article-123', snippet: '深入思考', context_preview: '正文' }]);
+  const pending = deferred<boolean>();
+  const close = vi.fn();
+  const select = vi.fn(() => pending.promise);
+  render(<CommandPalette open onOpenChange={close} onSelectResult={select} />);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '一个问题' } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  fireEvent.click(screen.getByRole('button', { name: '一个问题 深入思考' }));
+  expect(select).toHaveBeenCalledWith('article-123.md', '一个问题');
+  expect(close).not.toHaveBeenCalled();
+  await act(async () => pending.resolve(false));
+  expect(close).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert')).toHaveTextContent('未能打开笔记');
+  expect(screen.getByRole('button', { name: '一个问题 深入思考' })).toBeInTheDocument();
+});
+
+it('exports an article with its title once and a readable filename', async () => {
+  vi.mocked(save).mockResolvedValue('/tmp/article.md');
+  render(<ExportDialog open onClose={vi.fn()} theme="paper" themeConfig={themeConfig}
+    exportContent={() => '# 一个问题\n\n正文'} filename="article-123.md" title="一个问题" />);
+  expect(screen.getByRole('textbox')).toHaveValue('一个问题');
+  fireEvent.click(screen.getByRole('button', { name: '导出为 Markdown' }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: '一个问题.md' }));
+  const bytes = vi.mocked(writeFile).mock.calls[0][1] as Uint8Array;
+  expect(new TextDecoder().decode(bytes)).toBe('# 一个问题\n\n正文');
+});
+
+it('exports plain text from the marked editor body with its article title', async () => {
+  const source = document.createElement('div');
+  source.setAttribute('data-note-body', '');
+  Object.defineProperty(source, 'innerText', { value: '纯文本正文' });
+  document.body.appendChild(source);
+  try {
+    vi.mocked(save).mockResolvedValue('/tmp/article.txt');
+    render(<ExportDialog open onClose={vi.fn()} theme="paper" themeConfig={themeConfig}
+      exportContent={() => '# 一个问题\n\n**纯文本正文**'} filename="article.md" title="一个问题" />);
+    fireEvent.click(screen.getByText('纯文本'));
+    fireEvent.click(screen.getByRole('button', { name: '导出为 纯文本' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(new TextDecoder().decode(vi.mocked(writeFile).mock.calls[0][1] as Uint8Array)).toBe('一个问题\n\n纯文本正文');
+  } finally { source.remove(); }
+});
+
+it('captures a static article heading with the body without changing the live title input', async () => {
+  const source = document.createElement('div');
+  source.setAttribute('data-note-content', '');
+  const input = document.createElement('textarea');
+  input.value = '一个问题';
+  source.appendChild(input);
+  const body = document.createElement('div');
+  body.textContent = '正文';
+  source.appendChild(body);
+  document.body.appendChild(source);
+  try {
+    vi.mocked(save).mockResolvedValue('/tmp/article.png');
+    vi.mocked(toPng).mockImplementation(async element => {
+      expect(element.querySelector('h1')?.textContent).toBe('一个问题');
+      expect(element.querySelector('textarea')).toBeNull();
+      expect(element.textContent).toContain('正文');
+      return 'data:image/png;base64,aGVsbG8=';
+    });
+    render(<ExportDialog open onClose={vi.fn()} theme="paper" themeConfig={themeConfig}
+      exportContent={() => '# 一个问题\n\n正文'} filename="article.md" title="一个问题" />);
+    fireEvent.click(screen.getByText('图片 (PNG)'));
+    fireEvent.click(screen.getByRole('button', { name: '导出为 图片 (PNG)' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(toPng).toHaveBeenCalledOnce();
+    expect(source.querySelector('textarea')).toBe(input);
+    expect(document.querySelectorAll('[data-note-content]')).toHaveLength(1);
+  } finally { source.remove(); }
 });
 
 it('composes the atmosphere ref without resetting focus on rerender', () => {

@@ -13,11 +13,12 @@ interface ExportDialogProps {
   themeConfig: { bg: string; text: string; muted: string };
   exportContent: () => string;
   filename: string;
+  title?: string;
 }
 
 type ExportFormat = 'md' | 'txt' | 'png' | 'jpg';
 
-export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, exportContent, filename }: ExportDialogProps) {
+export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, exportContent, filename, title }: ExportDialogProps) {
   const [format, setFormat] = useState<ExportFormat>('md');
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +31,8 @@ export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, 
   const dialogRef = useDialogFocus(open, requestClose, inputRef);
 
   useEffect(() => {
-    if (open) { setCustomName(filename.replace(/\.md$/, '')); setError(null); }
-  }, [open, filename]);
+    if (open) { setCustomName((title || filename.replace(/\.md$/, '')).replace(/[\\/:*?"<>|]/g, '-')); setError(null); }
+  }, [open, filename, title]);
 
   const handleExport = async () => {
     if (busyRef.current) return;
@@ -47,25 +48,47 @@ export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, 
 
       if (format === 'md' || format === 'txt') {
         const ext = format === 'md' ? '.md' : '.txt';
+        const bodyText = (document.querySelector('[data-note-body], .tiptap') as HTMLElement | null)?.innerText;
         const outputContent = format === 'txt'
-          ? (document.querySelector('.tiptap') as HTMLElement | null)?.innerText ?? content
+          ? bodyText === undefined ? content : [title, bodyText].filter(Boolean).join('\n\n')
           : content;
         const path = await save({ defaultPath: `${finalName}${ext}`, filters: [{ name: format === 'md' ? 'Markdown' : 'Text', extensions: [format] }] });
         if (!path) return;
         await writeFile(path, new TextEncoder().encode(outputContent));
       } else {
         // PNG/JPG export using html-to-image
-        const element = document.querySelector('.tiptap') as HTMLElement;
-        if (!element) throw new Error('Editor not found');
-
-        const { toPng, toJpeg } = await import('html-to-image');
-        const getDataUrl = format === 'png' ? toPng : toJpeg;
-
-        const dataUrl = await getDataUrl(element, {
-          quality: 0.95,
-          pixelRatio: 2,
-          backgroundColor: themeConfig.bg,
-        });
+        const source = document.querySelector<HTMLElement>('[data-note-content]') ?? document.querySelector<HTMLElement>('[data-note-body], .tiptap');
+        if (!source) throw new Error('Editor not found');
+        const element = source.cloneNode(true) as HTMLElement;
+        element.style.width = `${source.getBoundingClientRect().width}px`;
+        element.style.position = 'fixed';
+        element.style.left = '-10000px';
+        element.style.top = '0';
+        element.style.color = themeConfig.text;
+        element.style.paddingBlock = '24px';
+        const titleInput = element.querySelector('textarea');
+        if (titleInput) {
+          const heading = document.createElement('h1');
+          heading.className = 'article-title';
+          heading.textContent = title ?? '';
+          titleInput.replaceWith(heading);
+        }
+        element.querySelectorAll('.is-zen-mode').forEach(node => node.classList.remove('is-zen-mode'));
+        element.querySelectorAll('[role="listbox"]').forEach(node => node.remove());
+        document.body.appendChild(element);
+        let dataUrl: string;
+        try {
+          const { toPng, toJpeg } = await import('html-to-image');
+          const getDataUrl = format === 'png' ? toPng : toJpeg;
+          dataUrl = await getDataUrl(element, {
+            quality: 0.95,
+            pixelRatio: 2,
+            backgroundColor: themeConfig.bg,
+            style: { position: 'static', left: 'auto', top: 'auto' },
+          });
+        } finally {
+          element.remove();
+        }
 
         const blob = await fetch(dataUrl).then(r => r.blob());
         const ext = format === 'png' ? '.png' : '.jpg';

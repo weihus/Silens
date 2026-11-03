@@ -4,6 +4,7 @@ import type { NoteTarget } from '../types';
 
 interface Backlink {
   filename: string;
+  title?: string;
   snippet: string;
   search_text: string;
   occurrence: number;
@@ -64,7 +65,7 @@ export function Backlinks({ filename, revision, onNavigate }: BacklinksProps) {
                   className="quiet-button w-full rounded-lg px-3 py-3 text-left"
                   onClick={() => onNavigate(link.filename, { text: link.search_text, occurrence: link.occurrence })}
                 >
-                  <span className="block break-all" style={{ color: 'var(--theme-text)' }}>{link.filename.replace(/\.md$/, '')}</span>
+                  <span className="block break-all" style={{ color: 'var(--theme-text)' }}>{link.title || link.filename.replace(/\.md$/, '')}</span>
                   <span className="mt-1 block leading-relaxed break-words">{link.snippet}</span>
                 </button>
               </li>

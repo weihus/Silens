@@ -20,7 +20,7 @@ const previous = document.querySelector('.demo-previous');
 const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
 const writingDescriptions = {
   follow: '继续写时，当前行跟随到窗口上方约三分之一处；主动滚动时，让你自由阅读。',
-  immersive: '输入时，标题、字数与设置入口淡出；停笔约两秒，界面再轻轻回来。',
+  immersive: '输入时，导航、字数与设置入口淡出；停笔约两秒，界面再轻轻回来。',
   focus: '开启“一期一会”，当前句保持清晰，周围文字变淡、虚化。移鼠可暂时看清全文。',
 };
 let typingTimer;
@@ -73,20 +73,25 @@ play.addEventListener('click', () => {
 motionPreference.addEventListener('change', () => { stopWritingDemo(); });
 
 const recallDescriptions = {
-  timeline: ['时间轴回顾', '侧栏按日期展示笔记内容'],
-  tags: ['标签回顾', '同一标签下的内容块按日期排列'],
-  search: ['搜索与上下文', '搜索结果旁展示相关段落预览'],
-  links: ['反向链接', '正文下方折叠显示引用来源与片段'],
+  timeline: ['按创作时间回顾', '随记与篇目按创作日期共同展示', 1100, 820, 320, 740],
+  tags: ['标签与时间交叉回顾', '同一标签下展示随记片段与篇目标题摘要，切换标签保留日期范围', 1100, 820, 320, 740],
+  search: ['搜索与上下文', '搜索结果旁展示相关段落预览', 1200, 560, 430, 820],
+  links: ['反向链接', '正文下方折叠显示引用来源与片段', 1200, 580, 430, 820],
 };
 for (const button of document.querySelectorAll('[data-recall]')) {
   button.addEventListener('click', () => {
     const feature = button.dataset.recall;
-    const [name, description] = recallDescriptions[feature];
+    const [name, description, width, height, mobileWidth, mobileHeight] = recallDescriptions[feature];
     for (const option of document.querySelectorAll('[data-recall]')) option.setAttribute('aria-pressed', String(option === button));
     const image = document.getElementById('recall-image');
     image.src = `./assets/${feature}.png`;
-    image.height = { timeline: 730, tags: 730, search: 560, links: 580 }[feature];
+    image.width = width;
+    image.height = height;
     image.alt = `Silens ${name}实际界面：${description}`;
+    const mobileSource = document.getElementById('recall-mobile-source');
+    mobileSource.srcset = `./assets/${feature}-mobile.png`;
+    mobileSource.width = mobileWidth;
+    mobileSource.height = mobileHeight;
     document.getElementById('recall-caption').textContent = `实际界面 · ${name} · 示例笔记`;
   });
 }

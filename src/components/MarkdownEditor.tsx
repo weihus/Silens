@@ -5,7 +5,8 @@ import { Markdown } from 'tiptap-markdown';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Extension } from '@tiptap/core';
 import { Plugin, TextSelection } from '@tiptap/pm/state';
-import type { NoteTarget, Theme } from '../types';
+import type { Document, NoteTarget, Theme } from '../types';
+import { displayTitle, parseDocument } from '../utils/documents';
 import Fuse from 'fuse.js';
 import { invoke } from '@tauri-apps/api/core';
 import { FocusSentenceExtension } from '../extensions/FocusSentenceExtension';
@@ -54,6 +55,8 @@ interface MarkdownEditorProps {
   onEditorReady?: (editor: Editor) => void;
   isFocusMode: boolean;
   knownTags: string[];
+  notesRevision?: number;
+  isJournal?: boolean;
 }
 
 const ICEBREAKER_KEY = 'silens_icebreaker_date';
@@ -85,6 +88,8 @@ export function MarkdownEditor({
   onEditorReady,
   isFocusMode,
   knownTags,
+  notesRevision = 0,
+  isJournal = true,
 }: MarkdownEditorProps) {
   const composingRef = useRef(false);
   const compositionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,7 +115,8 @@ export function MarkdownEditor({
   const [linkItems, setLinkItems] = useState<string[]>([]);
   const [linkActiveIndex, setLinkActiveIndex] = useState(0);
   const linkRangeRef = useRef<{ from: number; to: number } | null>(null);
-  const linkFuseRef = useRef<Fuse<{ name: string }> | null>(null);
+  const linkFuseRef = useRef<Fuse<{ name: string; title: string }> | null>(null);
+  const [docTitles, setDocTitles] = useState<Record<string, string>>({});
   const [allDocNames, setAllDocNames] = useState<string[]>([]);
 
   // 1.5s Debounced save handler
@@ -168,6 +174,7 @@ export function MarkdownEditor({
       attributes: {
         role: 'textbox',
         'aria-label': '笔记正文',
+        'data-note-body': '',
         'aria-multiline': 'true',
         // Typography System: 纯粹的系统无衬线、固定 19px、1.9 行高、0 段距、禁用标题干扰
         class: `prose ${theme === 'night' ? 'prose-invert' : 'prose-slate'} max-w-none focus:outline-none text-[17px] leading-[1.9] tracking-[0.03em] prose-p:my-0 prose-a:no-underline prose-strong:font-semibold min-h-[50vh]`,
@@ -278,20 +285,25 @@ export function MarkdownEditor({
 
   // Load all document names for link suggestions
   useEffect(() => {
+    let active = true;
     const loadDocs = async () => {
       try {
-        const docs = await invoke<string[]>('search_docs_by_prefix', { prefix: '' });
-        setAllDocNames(docs);
-        linkFuseRef.current = new Fuse(docs.map(d => ({ name: d })), {
-          keys: ['name'],
-          threshold: 0.3,
-        });
+        const docs = await invoke<Document[]>('get_all_documents');
+        if (!active) return;
+        const candidates = docs.map(doc => ({
+          name: doc.filename.endsWith('.md.md') ? doc.filename : doc.filename.replace(/\.md$/, ''),
+          title: doc.title || displayTitle(doc.filename, parseDocument(doc.filename, doc.content).title),
+        }));
+        setAllDocNames(candidates.map(doc => doc.name));
+        setDocTitles(Object.fromEntries(candidates.map(doc => [doc.name, doc.title])));
+        linkFuseRef.current = new Fuse(candidates, { keys: ['name', 'title'], threshold: 0.3 });
       } catch (err) {
         console.error('Failed to load doc names:', err);
       }
     };
-    loadDocs();
-  }, []);
+    void loadDocs();
+    return () => { active = false; };
+  }, [notesRevision]);
 
   const updateLinkContext = useCallback(() => {
     if (!editor || composingRef.current || editor.view.composing) return;
@@ -314,7 +326,7 @@ export function MarkdownEditor({
     }
 
     const query = linkMatch[1];
-    if (query.includes(' ')) {
+    if (query.includes('\n') || query.includes('|')) {
       setLinkOpen(false);
       linkRangeRef.current = null;
       return;
@@ -394,10 +406,12 @@ export function MarkdownEditor({
     if (!editor || composingRef.current || editor.view.composing) return;
     const r = linkRangeRef.current;
     if (!r) return;
-    editor.chain().focus().insertContentAt({ from: r.from, to: r.to }, { type: 'text', text: `[[${docName}]] ` }).run();
+    const label = (docTitles[docName] ?? docName).replace(/[\[\]|]/g, '');
+    const target = label !== docName ? `${docName}|${label}` : docName;
+    editor.chain().focus().insertContentAt({ from: r.from, to: r.to }, { type: 'text', text: `[[${target}]] ` }).run();
     setLinkOpen(false);
     linkRangeRef.current = null;
-  }, [editor]);
+  }, [editor, docTitles]);
 
   const applyTag = useCallback((tag: string) => {
     if (!editor || composingRef.current || editor.view.composing) return;
@@ -419,7 +433,7 @@ export function MarkdownEditor({
     const today = todayKey();
     const empty = editor.getText().trim() === '';
 
-    if (empty && stored !== today) {
+    if (empty && isJournal && stored !== today) {
       if (!icebreakerShownRef.current) {
         const idx = Math.floor(Math.random() * ICEBREAKER_PHRASES.length);
         setIcebreakerText(ICEBREAKER_PHRASES[idx]);
@@ -431,7 +445,7 @@ export function MarkdownEditor({
       setIcebreakerEvap(false);
       icebreakerShownRef.current = false;
     }
-  }, [editor]);
+  }, [editor, isJournal]);
 
   useEffect(() => {
     evaluateIcebreaker();
@@ -679,7 +693,7 @@ export function MarkdownEditor({
                 }`}
                 style={{ color: 'var(--theme-text)' }}
               >
-                {doc}
+                {docTitles[doc] ?? doc}
               </button>
             ))}
           </div>

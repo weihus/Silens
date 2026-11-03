@@ -1,4 +1,5 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { documentKind } from '../utils/documents';
 import type { NoteTarget, Theme } from '../types';
 import { MarkdownEditor } from './MarkdownEditor';
 import { Backlinks } from './Backlinks';
@@ -18,11 +19,36 @@ interface CanvasProps {
   isSidebarOpen?: boolean;
   disabled?: boolean;
   filename: string | null;
+  title?: string;
+  onTitleChange?: (value: string) => void;
   notesRevision: number;
   onNavigate: (filename: string, searchText: NoteTarget) => void;
 }
 
-export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false, filename, notesRevision, onNavigate }: CanvasProps) {
+export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false, filename, title = '', onTitleChange, notesRevision, onNavigate }: CanvasProps) {
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const handleEditorReady = useCallback((editor: Editor) => {
+    editorRef.current = editor;
+    onEditorReady(editor);
+  }, [onEditorReady]);
+  const lastFilename = useRef<string | null>(null);
+  const article = !!filename && documentKind(filename) === 'article';
+  useLayoutEffect(() => {
+    const input = titleRef.current;
+    if (!input) return;
+    const resize = () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`; };
+    resize();
+    const observer = new ResizeObserver(resize);
+    if (input.parentElement) observer.observe(input.parentElement);
+    return () => observer.disconnect();
+  }, [title, article, disabled]);
+  useEffect(() => {
+    if (disabled || filename === lastFilename.current) return;
+    lastFilename.current = filename;
+    if (article && !title) titleRef.current?.focus({ preventScroll: true });
+    if (wrapperRef.current) wrapperRef.current.scrollTop = 0;
+  }, [filename, disabled, article, title]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,16 +80,40 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
     >
       <div className="canvas-writing-area" inert={disabled}>
         <div className="h-24" />
+        <div data-note-content>
+        {article && (
+          <div className="article-title-area">
+            <textarea
+              ref={titleRef}
+              aria-label="篇目标题"
+              rows={1}
+              placeholder="未命名笔记"
+              value={title}
+              className="article-title"
+              onChange={event => { onTitleChange?.(event.target.value); onTyping(); }}
+              onKeyDown={event => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                if (event.key === 'Enter' || (event.key === 'ArrowDown' && event.currentTarget.selectionStart === title.length)) {
+                  event.preventDefault();
+                  editorRef.current?.commands.focus('start');
+                }
+              }}
+            />
+          </div>
+        )}
         <MarkdownEditor
           theme={theme}
           onChange={(value) => { if (!disabled) onChange(value); }}
           onTyping={() => { if (!disabled) onTyping(); }}
-          onEditorReady={onEditorReady}
+          onEditorReady={handleEditorReady}
+          notesRevision={notesRevision}
+          isJournal={!article}
           isFocusMode={isFocusMode}
           knownTags={knownTags}
           targetSearchText={disabled ? null : targetSearchText}
           onConsumedTargetSearchText={onConsumedTargetSearchText}
         />
+        </div>
         {!disabled && !isFocusMode && filename && (
           <Backlinks key={filename} filename={filename} revision={notesRevision} onNavigate={onNavigate} />
         )}

@@ -3,11 +3,16 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Editor } from '@tiptap/react';
 import { applyEncodedContent, decodeEmptyLines, encodeEmptyLines } from '../utils/emptyLines';
 
+import { documentKind, parseDocument, serializeDocument } from '../utils/documents';
+import type { DocumentKind } from '../types';
+
 type SaveStatus = 'saved' | 'pending' | 'saving' | 'error';
-type Session = { filename: string; content: string; saved: string | null };
+
+type Session = { filename: string; content: string; saved: string | null; title: string; body: string; kind: DocumentKind };
 
 export function useDocumentSession(editor: Editor | null, onSaved: (filename: string, content: string) => void) {
   const [text, setText] = useState('');
+  const [title, setTitle] = useState('');
   const [filename, setFilename] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<SaveStatus>('saved');
@@ -47,14 +52,33 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
     await write;
   }, []);
 
-  const change = useCallback((encoded: string) => {
-    if (busy.current || !session.current) return;
-    setText(encoded);
-    session.current.content = decodeEmptyLines(encoded);
-    setStatus(session.current.content === session.current.saved ? 'saved' : 'pending');
+  const scheduleSave = useCallback(() => {
+    const current = session.current;
+    if (!current) return;
+    current.content = current.saved === null && !current.title && !current.body
+      ? '' : serializeDocument(current.kind, current.title, current.body);
+    const unchanged = current.content === current.saved || (current.saved === null && current.content === '');
+    setStatus(unchanged ? 'saved' : 'pending');
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void flush().catch(() => {}); }, 1500);
   }, [flush]);
+
+  const change = useCallback((encoded: string) => {
+    if (busy.current || !session.current) return;
+    setText(encoded);
+    session.current.body = decodeEmptyLines(encoded);
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const changeTitle = useCallback((value: string) => {
+    if (busy.current || !session.current || session.current.kind !== 'article') return;
+    const next = value.replace(/[\r\n]+/g, ' ');
+    setTitle(next);
+    session.current.title = next;
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const getContent = useCallback(() => session.current?.content ?? '', []);
 
   const open = useCallback(async (nextFilename: string, allowMissing = false, recovery?: 'reload' | 'preserve'): Promise<boolean> => {
     if (!editor || busy.current) return false;
@@ -84,17 +108,19 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
           saved = null;
         } else {
           if (String(cause) === 'DOCUMENT_NOT_FOUND') {
-            setNotice({ message: '这一天还没有笔记' });
+            setNotice({ message: documentKind(nextFilename) === 'journal' ? '这一天还没有笔记' : '这篇笔记不存在或已被移走' });
           } else {
             setError('无法读取笔记，请检查文件夹是否可用。');
           }
           return false;
         }
       }
-      const encoded = encodeEmptyLines(content);
+      const parsed = parseDocument(nextFilename, content);
+      const encoded = encodeEmptyLines(parsed.body);
       applyEncodedContent(editor, encoded);
-      session.current = { filename: nextFilename, content, saved };
+      session.current = { filename: nextFilename, content, saved, ...parsed };
       setText(encoded);
+      setTitle(parsed.title);
       setFilename(nextFilename);
       setStatus('saved');
       setError(null);
@@ -111,5 +137,5 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  return { text, filename, loading, status, error, notice, change, open, flush };
+  return { text, title, filename, loading, status, error, notice, change, changeTitle, getContent, open, flush };
 }

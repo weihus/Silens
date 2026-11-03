@@ -9,7 +9,7 @@
   <a href="README.md">简体中文</a> | <a href="README.en.md">English</a>
 </div>
 
-Silens is a local-first Markdown writing tool built on [Tauri](https://tauri.app/), with a warm paper palette and a gentle interface for focused writing.
+Silens is a local-first Markdown writing tool built on [Tauri](https://tauri.app/), with daily notes for passing thoughts and titled notes for longer pieces. Open straight into today's note and start writing; both forms share a warm paper palette and a gentle interface for focused writing.
 
 [Product website source](website/index.html) · [Download Silens](https://github.com/weihus/Silens/releases/latest)
 
@@ -28,15 +28,14 @@ Before publishing, configure the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KE
 Set repository Settings → Pages → Source to **GitHub Actions** to enable deployment through `website.yml`. The workflow deployment result provides the published URL.
 
 
-## v1.1.0
+## Current development & releases
 
-This minor release focuses on dependable saving and a quieter writing experience while retaining the existing Markdown note format. See the [changelog](CHANGELOG.md) and [Chinese user manual](MANUAL.md).
+The features below describe the **current development build**. For features available in a downloaded package, read its [Release notes](https://github.com/weihus/Silens/releases). See also the [changelog](CHANGELOG.md) and [Chinese user manual](MANUAL.md).
 
-- Correct historical-note save targets, empty edits, and save ordering during navigation; preserve a draft copy before reloading external changes.
-- Verify snapshots before publishing, retain originals during workspace migration, and store indexes in app-local data.
-- Compact search with previews only when results exist; fix persistent empty-result notices, overlapping panels, and focus conflicts.
-- Warm paper and gray-green visual hierarchy, deliberate sidebar dismissal, and a gentle UI return after 2.2 seconds of inactivity.
-- Improve IME completion, Wiki links, blank lines in Markdown code blocks, exports, and Apple Silicon development launches under Rosetta.
+- Start in today's daily note, or create a titled note for a standalone piece.
+- Review daily notes by block and titled notes by whole-piece title and summary, through shared time and tag views.
+- Keep creation dates fixed while tracking modifications separately; carry creation metadata with backups and workspace migrations.
+- Use the same focus mode, timer, fading interface, and export options for both kinds of writing.
 
 ## About
 
@@ -46,9 +45,10 @@ Notes are stored as plain `.md` files, by default in `Documents/Silens_Notes`. T
 
 - [x] **Gentle interface**: Warm paper, white, and night themes, with system theme and reduced-motion preferences supported.
 - [x] **Editing & autosave**: Save to the current file after 1500ms of idle, including clearing an existing note; refuse overwrites when external changes are detected.
-- [x] **Tags, timeline & search**: Local indexing, tag browsing, contextual search previews, and explicit sidebar, pin, and search controls.
-- [x] **Focus & ambient sound**: Typewriter scrolling, a focus timer, and Rain, Fire, and Night soundscapes.
-- [x] **Wiki links**: `[[document]]` completion and forward navigation, with prefix, substring, and fuzzy matching.
+- [x] **Daily & titled notes**: Start in today's file or create a standalone piece with its own title and stable filename.
+- [x] **Tags, timeline & search**: Review daily-note blocks and whole titled notes through shared creation-date and tag filters, with contextual search previews.
+- [x] **Focus & ambient sound**: Both kinds of writing share typewriter scrolling, a focus timer, and Rain, Fire, and Night soundscapes.
+- [x] **Wiki links**: `[[document]]` completion and `[[file|label]]` aliases, with forward navigation and prefix, substring, and fuzzy matching.
 - [x] **Snapshots & workspace migration**: Publish backups after verification; copy and verify notes during migration while retaining originals.
 - [x] **Backlinks**: A collapsed section below the note shows referring notes and context; click to return to a source. Hidden in focus mode.
 - [ ] **AI-assisted organization**: Future work only; processing or uploading notes must require explicit user opt-in.
@@ -64,24 +64,27 @@ The frontend and backend communicate through Tauri IPC:
 
 ### 1. Writing & browsing
 
-- **Warm writing canvas**: A paper background, gray-green text and accents, subtle borders, and generous spacing. The interface fades while typing and respects the system reduced-motion preference.
-- **Explicit navigation**: The header shows the current note's date or filename, with a “Back to today” button when viewing older notes. Browse, search, and sidebar pinning have explicit buttons; key controls provide accessible names and visible keyboard focus.
-- **Markdown editing**: Imported or opened Markdown retains headings and code structure. Typing `# ` does not automatically create a heading. Bold, italic, lists, and `#tags` are supported, with local indexing for browsing content blocks.
-- **Timeline & search**: Browse by date or tag. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. `Cmd/Ctrl + K` opens compact search; context previews appear with results and are hidden on narrow windows. A pinned sidebar returns after search closes.
-- **Wiki links & backlinks**: Type `[[` to select a note and click a link to open its target. When other notes refer to the current document, a collapsed section below the editor shows the number of referring notes. Expand it for source names and context; click to return to a source and attempt to locate the reference. Each source appears once; self-references and code examples are excluded. Hidden in focus mode. References are read from the current workspace files and refresh on opening, saving, or returning to the app.
-- **Atmosphere & export**: Settings include themes, ambient sound, volume, focus duration, and local file actions. Export supports Markdown, plain text, PNG, and JPG.
+- **Daily notes & titled pieces**: Launch into today's `YYYY-MM-DD.md` and write without first entering a title. Use the sidebar **+** or **新建篇目 (New titled note)** in `Cmd/Ctrl + K` to create a standalone piece. Its title and body share one `article-UUID.md` file, with the first H1 storing the title. Editing the title keeps the filename stable.
+- **Warm writing canvas**: A paper background, gray-green text and accents, subtle borders, and generous spacing. Both daily and titled notes share the Ichigo-ichie focus mode, timer, and interface that fades while typing and respects the system reduced-motion preference.
+- **Explicit navigation**: Browse, search, and sidebar pinning have explicit buttons; key controls provide accessible names and visible keyboard focus. “Back to today” returns to the daily note. Reviewing results keeps the current editor document in place until you click a result to open its full text.
+- **Markdown editing**: Imported or opened Markdown retains headings and code structure. Typing `# ` does not automatically create a heading. Bold, italic, lists, and `#tags` are supported.
+- **Time, tags & titled-note browsing**: Time and tags provide shared entry points for both kinds of writing: daily notes appear as blocks, and titled notes as whole pieces with titles and summaries. Views organize and filter by creation date; the selected date range persists across time, tag, and titled-note views. A separate **继续写作 (Continue writing)** entry opens titled notes in **Recently modified** order, with creation-date sorting available too. The date filter works within either recall view, and complete creation and modification times remain available in each note's tooltip.
+- **Search & sidebar controls**: `Cmd/Ctrl + K` opens compact search; context previews appear with results and are hidden on narrow windows. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. A pinned sidebar returns after search closes.
+- **Wiki links & backlinks**: Type `[[` to select a note, use `[[file|label]]` for a display alias, and click a link to open its target. Stable filenames keep links intact when you edit a note's title. When other notes refer to the current document, a collapsed section below the editor shows the number of referring notes. Expand it for source titles and context; click to return to a source and attempt to locate the reference. Each source appears once; self-references and code examples are excluded. Hidden in focus mode. References are read from the current workspace files and refresh on opening, saving, or returning to the app.
+- **Atmosphere & export**: Settings include themes, ambient sound, volume, focus duration, and local file actions. Both kinds of writing support Markdown, plain text (TXT), PNG, and JPG exports, including the title for titled notes.
 
 ### 2. Saving, backups & recovery
 
-- **Keep the current filename**: Today's note uses `YYYY-MM-DD.md`; after opening an older note or another file, autosave writes back to that file. Clearing an existing note is saved too. A new page with no content does not create an empty file.
+- **Keep the current filename**: Today's note uses `YYYY-MM-DD.md`, and newly created titled notes use a stable `article-UUID.md`; changing its title leaves that filename intact. After opening an older note or another file, autosave writes back to that file. Clearing an existing note is saved too. A new page with neither a title nor body does not create an empty file.
+- **Creation & modification dates**: Creation dates stay fixed, while the file's modification time tracks edits independently. Creation dates are registered in the workspace's `.silens-created.json`; the app-local SQLite index can be rebuilt from the notes and this registry. Older article files are registered using the earliest available filesystem birth or modification time, and that creation date then remains fixed.
 - **Optimistic conflict checks**: Before saving, disk content is compared with the last loaded or saved content. Detected changes or deletion cause the overwrite to be refused. Writes use a temporary file followed by replacement; failures show an error and retain the text in the editor so you can export a copy. This is not a cross-process lock or concurrent-edit merge mechanism.
 - **Save and back up before closing**: Closing the window waits for pending saves, then creates a backup before closing. If saving or backup fails, the window stays open and displays an error.
-- **Local snapshots**: Snapshots are created every 6 hours while the app runs, before closing the window, or through the manual backup action. They are stored in `Documents/Silens_Backups`. Files are copied to a staging directory and verified before the snapshot is published. Successful publication triggers retention of the latest 10 snapshots; cleanup failures may leave more than 10. Failed copies or verification do not trigger removal of older backups.
+- **Local snapshots**: Snapshots include notes and the workspace's `.silens-created.json` creation-date registry. They are created every 6 hours while the app runs, before closing the window, or through the manual backup action. They are stored in `Documents/Silens_Backups`. Files are copied to a staging directory and verified before the snapshot is published. Successful publication triggers retention of the latest 10 snapshots; cleanup failures may leave more than 10. Failed copies or verification do not trigger removal of older backups.
 - **In-app restore**: Under "书写氛围 → 本地文件 → 恢复备份", snapshots are listed with their time and note count. Confirming restores the whole notes folder. The current notes are snapshotted first, so the same steps can return to the state before the restore; notes created after the chosen snapshot leave the folder but remain in that snapshot. "查看备份" still opens the backup folder.
 
 ### 3. Workspaces & cloud folders
 
-Workspace migration accepts a folder on your machine, including a local iCloud Drive, OneDrive, or Dropbox sync folder. Silens copies Markdown files into `Silens_Notes` at the destination, verifies the content, and rebuilds the local index before switching workspaces. Original files are retained. Existing destination files with different content cause migration to stop without overwriting them; identical files can be reused. A failed migration may leave files already copied to the destination.
+Workspace migration accepts a folder on your machine, including a local iCloud Drive, OneDrive, or Dropbox sync folder. Silens copies Markdown files and carries the `.silens-created.json` creation-date registry into `Silens_Notes` at the destination, verifies the content, and rebuilds the app-local index before switching workspaces. Original files are retained. Existing destination files with different content cause migration to stop without overwriting them; identical files can be reused. A failed migration may leave files already copied to the destination.
 
 Third-party software handles cross-device synchronization. Silens does not guarantee detection or merging of concurrent edits. Backups remain in `Documents/Silens_Backups`, but `Documents` may itself be cloud-managed, so these snapshots are not guaranteed to be independent offline copies.
 
@@ -93,7 +96,7 @@ Tag organization and search currently run locally. AI-assisted organization is n
 
 Shortcuts complement the visible controls:
 
-- **Global search (Spotlight)**: `Cmd / Ctrl` + `K`
+- **Global search / New titled note**: `Cmd / Ctrl` + `K`, then search or choose **New titled note** (also available through the sidebar **+**)
 - **Open / collapse timeline**: `Cmd / Ctrl` + `L`
 - **Toggle focus mode**: `Cmd / Ctrl` + `Shift` + `F`
 - **Toggle atmosphere settings**: `Cmd / Ctrl` + `Shift` + `M`

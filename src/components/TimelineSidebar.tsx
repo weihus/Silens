@@ -1,25 +1,25 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Pin, X } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, CalendarDays, FilePenLine, Pin, Plus, X } from 'lucide-react';
+import type { Document, RecallDay, RecallRange } from '../types';
+import { documentDate, withinRange } from '../utils/recall';
+import { ArticleCard, RecallTimeline } from './RecallTimeline';
+import { displayTitle, documentKind, parseDocument } from '../utils/documents';
+import { extractTagsFromText } from '../utils/tags';
 import { invoke } from '@tauri-apps/api/core';
 import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSegmentDateInput';
-
-export interface DayRecord {
-  date: string;
-  tags: TagGroup[];
-}
-
-export interface TagGroup {
-  tag: string;
-  blocks: string[];
-}
 
 // SQLite 暗影索引区块的类型定义
 export interface ShadowBlock {
   id: number;
   date: string;
+  filename: string;
+  title: string;
+  kind: 'journal' | 'article';
   content: string;
   raw_markdown: string;
+  created: number;
+  modified: number;
 }
 
 // 独立的文本块：长内容截断 + 尾部渐隐
@@ -74,11 +74,14 @@ const MeasureItem: React.FC<{ index: number; onMeasure: (idx: number, h: number)
     observer.observe(ref.current);
     return () => observer.disconnect();
   }, [index, onMeasure]);
-  return <div ref={ref}>{children}</div>;
+  return <div ref={ref} className="flow-root">{children}</div>;
 };
 
 // 标签透视视图：搭载动态高度虚拟滚动 (Variable-height Virtualizer) 和极简时间刻度 (Scrubber)
-const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) => void; onDateClick?: (date: string) => void; onSelectResult?: (date: string, searchText: string) => void }> = ({ tag, onBlockClick, onDateClick, onSelectResult }) => {
+const TagPerspectiveView: React.FC<{ tag: string; revision: number; range?: RecallRange | null; onBrowseDate: (date: string) => void; onBlockClick?: (text: string) => void; onDateClick?: (date: string) => void; onSelectResult?: (date: string, searchText: string) => void }> = ({ tag, revision, range, onBrowseDate, onBlockClick, onDateClick, onSelectResult }) => {
+  const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [retry, setRetry] = useState(0);
   const [blocks, setBlocks] = useState<ShadowBlock[]>([]);
   const [heights, setHeights] = useState<Record<number, number>>({});
   const [scrollTop, setScrollTop] = useState(0);
@@ -88,11 +91,36 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    invoke('query_blocks_by_tag', { tag }).then(res => setBlocks(res as ShadowBlock[]));
-  }, [tag]);
+    let active = true;
+    setLoading(true);
+    setFailed(false);
+    invoke<ShadowBlock[]>('query_blocks_by_tag', { tag, ...(range?.start ? { startDate: range.start } : {}), ...(range?.end ? { endDate: range.end } : {}) }).then(result => {
+      if (!active) return;
+      const seen = new Set<string>();
+      setBlocks(result.filter(block => {
+        if (!withinRange(block.date, range)) return false;
+        if (block.kind !== 'article') return true;
+        const filename = block.filename ?? block.date;
+        if (seen.has(filename)) return false;
+        seen.add(filename);
+        return true;
+      }).sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created || a.id - b.id));
+      setHeights({});
+      setLoading(false);
+    }).catch(() => { if (active) { setBlocks([]); setFailed(true); setLoading(false); } });
+    return () => { active = false; };
+  }, [tag, revision, retry, range?.start, range?.end]);
 
   useEffect(() => {
-    if (containerRef.current) setViewportHeight(containerRef.current.clientHeight);
+    setScrollTop(0);
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+  }, [tag, range?.start, range?.end]);
+
+  useEffect(() => {
+    if (containerRef.current) {
+      const style = getComputedStyle(containerRef.current);
+      setViewportHeight(containerRef.current.clientHeight - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0'));
+    }
     const observer = new ResizeObserver(entries => {
       if (entries[0]) setViewportHeight(entries[0].contentRect.height);
     });
@@ -176,8 +204,9 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
   }, [totalHeight, viewportHeight]);
 
   return (
+    <div className="absolute inset-0">
     <div
-      className={`absolute inset-0 overflow-y-auto pl-8 pr-16 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
+      className={`recall-tag-scroll h-full overflow-y-auto pl-8 pr-16 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
       onScroll={(e) => {
         setScrollTop(e.currentTarget.scrollTop);
         setIsScrolling(true);
@@ -186,20 +215,23 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
       }}
       ref={containerRef}
     >
+      {(loading || failed || !blocks.length) && (
+        <div role="status" className="text-sm py-8" style={{ color: 'var(--theme-muted)' }}>
+          {loading ? '正在加载…' : failed ? <button onClick={() => setRetry(n => n + 1)}>读取失败，点击重试</button> : '这个标签下还没有内容'}
+        </div>
+      )}
       <div style={{ paddingTop, paddingBottom }}>
-        {visibleBlocks.map((block, i) => {
+        {!loading && visibleBlocks.map((block, i) => {
           const actualIndex = startIndex + i;
           return (
             <MeasureItem key={block.id} index={actualIndex} onMeasure={onMeasure}>
               <div className="mb-10 group">
-                <div 
-                  className="text-xs font-mono tracking-wide opacity-80 mb-3 uppercase flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity w-fit"
-                  onClick={() => onDateClick?.(block.date)}
-                  title="点击跳转到该天的日记"
-                >
-                  <div className="w-1.5 h-1.5 rounded-full bg-current opacity-50" />
-                  {block.date}
-                </div>
+                {(actualIndex === 0 || blocks[actualIndex - 1].date !== block.date) && (
+                  <button type="button" onClick={() => onBrowseDate(block.date)} className="quiet-button mb-4 rounded py-1 text-xs font-mono" style={{ color: 'var(--theme-muted)' }}>{block.date}</button>
+                )}
+                {block.kind === 'article' ? (
+                  <ArticleCard article={{ filename: block.filename, title: block.title || '未命名笔记', content: block.content, created: block.created, modified: block.modified, created_date: block.date, tags: extractTagsFromText(block.content) }} onOpen={onDateClick} dateMode="none" />
+                ) : <>
                 <ExpandableTextBlock
                   textContent={block.content}
                   timeLabel={null}
@@ -207,24 +239,24 @@ const TagPerspectiveView: React.FC<{ tag: string; onBlockClick?: (text: string) 
                     const firstLine = block.content.split('\n')[0].trim();
                     const searchText = firstLine ? firstLine : `#${tag}`;
                     if (onSelectResult) {
-                      onSelectResult(block.date, searchText);
+                      onSelectResult(block.filename, searchText);
                     } else {
                       onBlockClick?.(searchText);
                     }
                   }}
                 />
+                </>}
               </div>
             </MeasureItem>
           );
         })}
       </div>
-
-      {/* 极简时间定位器 (Scrubber) */}
-      {blocks.length > 0 && (
+    </div>
+      {activeYearMonth && totalHeight > viewportHeight && (
         <div 
           ref={trackRef}
           onPointerDown={handlePointerDown}
-          className="fixed right-3 top-1/2 -translate-y-1/2 h-[50vh] w-6 cursor-ns-resize flex flex-col items-center z-50 touch-none group"
+          className="absolute right-0 top-1/2 -translate-y-1/2 h-[50vh] w-6 cursor-ns-resize flex flex-col items-center z-50 touch-none group"
         >
           <div className="absolute inset-y-0 w-[2px] rounded-full transition-opacity duration-300" style={{ backgroundColor: 'var(--theme-muted)', opacity: isDragging ? 0.3 : 0.15 }} />
           <div
@@ -268,7 +300,10 @@ export const TimelineSidebar: React.FC<{
   onDateClick?: (date: string) => void;
   onSelectResult?: (date: string, searchText: string) => void;
   onJumpTime?: (preset?: 'yesterday' | 'this-week' | 'this-month', customRange?: { start?: string; end?: string }) => void;
-  rangeDocs?: { date: string; content: string }[];
+  recallRange?: RecallRange | null;
+  externalForceTime?: number;
+  onNewArticle?: () => void;
+  currentFilename?: string | null;
   rangeLabel?: string | null;
   rangeLoading?: boolean;
   rangeError?: string | null;
@@ -279,11 +314,15 @@ export const TimelineSidebar: React.FC<{
   isPaletteOpen?: boolean;
   isPinned?: boolean;
   onTogglePin?: () => void;
-  onPinDate?: (date: string) => void;
-}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeDocs, rangeLabel, rangeLoading = false, rangeError = null, onClearRange, theme, externalForceTag, onClearForceTag, isPinned = false, onTogglePin, onPinDate }) => {
+}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeLabel, rangeLoading = false, rangeError = null, onClearRange, theme, externalForceTag, onClearForceTag, isPinned = false, onTogglePin, onNewArticle, currentFilename, recallRange, externalForceTime }) => {
   const reduceMotion = useReducedMotion();
-  const [records, setRecords] = useState<DayRecord[]>([]);
-  const [viewMode, setViewMode] = useState<'timeline' | 'tag' | 'all-tags'>('timeline');
+  const [records, setRecords] = useState<RecallDay[]>([]);
+  const [viewMode, setViewMode] = useState<'timeline' | 'tag' | 'all-tags' | 'articles'>('timeline');
+  const [articles, setArticles] = useState<Document[]>([]);
+  const [articleSort, setArticleSort] = useState<'created' | 'modified'>('modified');
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataFailed, setDataFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [isScrolling, setIsScrolling] = useState(false);
   const [showJumpPopover, setShowJumpPopover] = useState(false);
@@ -308,11 +347,11 @@ export const TimelineSidebar: React.FC<{
   const startHasAny = customStart.year || customStart.month || customStart.day;
   const endHasAny = customEnd.year || customEnd.month || customEnd.day;
 
-  // 区间日记浏览模式：rangeDocs / rangeLabel 有值即激活（即使 rangeDocs 为空也展示"暂无记录"占位）
   const inRangeMode = rangeLabel != null;
   const closeRangeMode = useCallback(() => { onClearRange?.(); }, [onClearRange]);
 
   const jumpPopoverRef = useRef<HTMLDivElement>(null);
+  const dateButtonRef = useRef<HTMLButtonElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 点击外部区域时关闭 Popover
@@ -346,21 +385,30 @@ export const TimelineSidebar: React.FC<{
     };
   }, []);
 
-  // 获取数据
-  const getTimelineData = useCallback(async () => {
-    try {
-      const data = await invoke('get_timeline_data') as DayRecord[];
-      setRecords(data);
-    } catch (err) {
-      console.error('Tauri IPC Error:', err);
-    }
-  }, []);
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setDataLoading(true);
+    setDataFailed(false);
+    Promise.all([invoke<RecallDay[]>('get_timeline_data'), invoke<Document[]>('get_all_documents')])
+      .then(([timeline, docs]) => {
+        if (!active) return;
+        setRecords(timeline);
+        setArticles(docs.filter(doc => documentKind(doc.filename) === 'article'));
+        setDataLoading(false);
+      }).catch(() => { if (active) { setDataFailed(true); setDataLoading(false); } });
+    return () => { active = false; };
+  }, [isOpen, tagsRev, retry]);
 
   useEffect(() => {
-    if (isOpen) {
-      getTimelineData();
-    }
-  }, [isOpen, tagsRev, getTimelineData]);
+    if (externalForceTime) setViewMode('timeline');
+  }, [externalForceTime]);
+
+  const visibleRecords = useMemo(() => records.filter(day => withinRange(day.date, recallRange)), [records, recallRange]);
+  const visibleArticles = useMemo(() => articles.filter(doc => withinRange(documentDate(doc), recallRange))
+    .sort((a, b) => b[articleSort] - a[articleSort] || a.filename.localeCompare(b.filename)), [articles, recallRange, articleSort]);
+  const selectTag = useCallback((tag: string) => { setActiveTag(tag); setViewMode('tag'); }, []);
+  const browseDate = useCallback((date: string) => { onJumpTime?.(undefined, { start: date, end: date }); }, [onJumpTime]);
 
   useEffect(() => {
     if (externalForceTag) {
@@ -373,22 +421,29 @@ export const TimelineSidebar: React.FC<{
   // 全局标签使用频率统计
   const tagFrequencies = useMemo(() => {
     const freqs: Record<string, number> = {};
-    records.forEach(r => {
+    visibleRecords.forEach(r => {
       r.tags?.forEach(tg => {
         freqs[tg.tag] = (freqs[tg.tag] || 0) + tg.blocks.length;
       });
     });
+    visibleArticles.forEach(doc => {
+      const tags = doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body);
+      for (const tag of tags.length ? tags : ['默认']) freqs[tag] = (freqs[tag] || 0) + 1;
+    });
     return Object.entries(freqs).sort((a, b) => b[1] - a[1]);
-  }, [records]);
+  }, [visibleRecords, visibleArticles]);
 
   return (
     <div
       className={`timeline-sidebar fixed top-0 left-0 h-full z-[80] ${isOpen ? 'timeline-sidebar-open' : 'w-0'}`}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+        if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
+          event.preventDefault();
           event.stopPropagation();
-          if (showJumpPopover) setShowJumpPopover(false);
-          else setIsOpen(false);
+          if (showJumpPopover) {
+            setShowJumpPopover(false);
+            dateButtonRef.current?.focus();
+          } else setIsOpen(false);
         }
       }}
     >
@@ -401,25 +456,33 @@ export const TimelineSidebar: React.FC<{
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: reduceMotion ? 0 : '-100%', opacity: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="h-full w-full flex flex-col pt-12 border-r"
+            className="h-full w-full flex flex-col pt-8 border-r"
             style={{
               backgroundColor: theme === 'night' ? '#171D1B' : theme === 'paper' ? '#FAF8F5' : '#FFFFFF',
               color: 'var(--theme-text)',
               borderColor: 'var(--theme-border)',
             }}
           >
-            {/* 顶部控制区：两个幽灵态模式切换指示器 */}
-            <div
-              className="flex items-center gap-2 px-6 pt-4 pb-6 select-none shrink-0"
-            >
-              <div ref={jumpPopoverRef} className="relative flex items-center gap-1.5">
-                <button type="button" className="quiet-button rounded-md px-2 py-2 text-sm"
-                  aria-expanded={showJumpPopover} aria-haspopup="dialog"
-                  style={{ color: viewMode === 'timeline' ? 'var(--theme-text)' : 'var(--theme-muted)' }}
-                  onClick={() => { setViewMode('timeline'); setShowJumpPopover((value) => !value); }}>
-                  时间
+            <div className="recall-heading">
+              <span>回顾</span>
+              <div className="flex items-center gap-1">
+                {onNewArticle && <button type="button" aria-label="新建篇目" title="新建篇目" className="quiet-button rounded-md p-2" onClick={onNewArticle}><Plus size={16} /></button>}
+                {onTogglePin && <button type="button" onClick={onTogglePin} aria-pressed={isPinned}
+                  aria-label={isPinned ? '取消固定侧栏' : '固定侧栏'} title={isPinned ? '取消固定侧栏' : '固定侧栏'}
+                  className="quiet-button rounded-md p-2" style={{ backgroundColor: isPinned ? 'var(--theme-selection)' : 'transparent' }}><Pin size={15} /></button>}
+                <button type="button" onClick={() => setIsOpen(false)} aria-label="关闭时间与标签侧栏" className="quiet-button rounded-md p-2"><X size={16} /></button>
+              </div>
+            </div>
+            <div className="recall-navigation">
+              <div className="recall-tabs" role="group" aria-label="回顾视角">
+                <button type="button" aria-pressed={viewMode === 'timeline'} onClick={() => { setViewMode('timeline'); setShowJumpPopover(false); }}>时间</button>
+                <button type="button" aria-pressed={viewMode === 'tag' || viewMode === 'all-tags'} onClick={() => { setViewMode('all-tags'); setShowJumpPopover(false); }}>标签</button>
+              </div>
+              <div ref={jumpPopoverRef} className="relative">
+                <button ref={dateButtonRef} type="button" className="quiet-button recall-date-button" aria-label="筛选创作时间" title="按创作时间筛选"
+                  aria-expanded={showJumpPopover} aria-haspopup="dialog" onClick={() => setShowJumpPopover(value => !value)}>
+                  <CalendarDays size={15} /><span>日期</span>
                 </button>
-                {/* 极简毛玻璃 Popover */}
                 <AnimatePresence>
                   {showJumpPopover && (
                     <motion.div
@@ -429,7 +492,7 @@ export const TimelineSidebar: React.FC<{
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
                       transition={{ duration: reduceMotion ? 0 : 0.15, ease: 'easeOut' }}
-                      className="timeline-date-popover absolute left-0 top-full mt-1 z-50 rounded-lg border p-3"
+                      className="timeline-date-popover absolute right-0 top-full mt-2 z-50 rounded-lg border p-3"
                       style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}
                     >
                       {customJumpMode ? (
@@ -508,35 +571,49 @@ export const TimelineSidebar: React.FC<{
                   )}
                 </AnimatePresence>
               </div>
-              {/* 右侧：标签云模式 —— 极小的 # 符号 */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setViewMode('all-tags');
-                }}
-                className="quiet-button rounded-md px-2 py-2 text-sm"
-                aria-pressed={viewMode !== 'timeline'}
-                style={{ color: viewMode === 'timeline' ? 'var(--theme-muted)' : 'var(--theme-text)' }}
-              >
-                标签
-              </button>
-              <div className="ml-auto flex items-center gap-1">
-                {onTogglePin && (
-                  <button type="button" onClick={onTogglePin} aria-pressed={isPinned}
-                    aria-label={isPinned ? '取消固定侧栏' : '固定侧栏'} title={isPinned ? '取消固定侧栏' : '固定侧栏'}
-                    className="quiet-button rounded-md p-2"
-                    style={{ backgroundColor: isPinned ? 'var(--theme-selection)' : 'transparent' }}>
-                    <Pin size={16} aria-hidden="true" />
-                  </button>
-                )}
-                <button type="button" onClick={() => setIsOpen(false)} aria-label="关闭时间与标签侧栏" className="quiet-button rounded-md p-2"><X size={16} /></button>
-              </div>
             </div>
+            <button type="button" className="quiet-button recall-continue" aria-label="浏览篇目" aria-pressed={viewMode === 'articles'}
+              onClick={() => { setViewMode('articles'); setShowJumpPopover(false); }}>
+              <FilePenLine size={15} />
+              <span className="flex-1 text-left">继续写作</span>
+              <span className="recall-continue-count">{visibleArticles.length} 篇</span>
+              <ArrowUpRight size={14} />
+            </button>
 
             {/* 动态透视容器：时间轴 vs 标签透视 */}
+            {inRangeMode && <div className="mb-3 flex items-center gap-2 px-8 text-xs" style={{ color: 'var(--theme-muted)' }}>
+              <span className="min-w-0 flex-1 break-words">创作时间 · {rangeLabel}</span>
+              <button type="button" className="quiet-button rounded p-1" aria-label="清除时间筛选" onClick={closeRangeMode}><X size={13} /></button>
+            </div>}
+            {viewMode === 'tag' && activeTag && <div className="recall-tag-heading">
+              <button type="button" className="quiet-button rounded p-1" aria-label="查看全部标签" onClick={() => setViewMode('all-tags')}><ArrowLeft size={14} /></button>
+              <span>#{activeTag}</span>
+            </div>}
+            {(viewMode === 'timeline' || viewMode === 'all-tags') && (dataLoading || dataFailed) && (
+              <div role="status" className="px-8 pb-3 text-xs" style={{ color: 'var(--theme-muted)' }}>
+                {dataLoading ? '正在加载…' : <button onClick={() => setRetry(n => n + 1)}>读取失败，点击重试</button>}
+              </div>
+            )}
             <div className="flex-1 relative w-full h-full overflow-hidden">
               <AnimatePresence mode="wait">
-                {viewMode === 'timeline' ? (
+                {viewMode === 'articles' ? (
+                  <motion.div key="articles" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 overflow-y-auto px-6 pb-24 custom-scrollbar">
+                    <div className="recall-order" role="group" aria-label="篇目排序">
+                      <button type="button" className="quiet-button rounded py-1" aria-pressed={articleSort === 'modified'} style={{ color: articleSort === 'modified' ? 'var(--theme-text)' : 'var(--theme-muted)' }} onClick={() => setArticleSort('modified')}>最近修改</button>
+                      <button type="button" className="quiet-button rounded py-1" aria-pressed={articleSort === 'created'} style={{ color: articleSort === 'created' ? 'var(--theme-text)' : 'var(--theme-muted)' }} onClick={() => setArticleSort('created')}>创作时间</button>
+                    </div>
+                    {dataLoading || dataFailed ? <div role="status" className="py-8 text-sm" style={{ color: 'var(--theme-muted)' }}>
+                      {dataLoading ? '正在加载…' : <button onClick={() => setRetry(n => n + 1)}>读取失败，点击重试</button>}
+                    </div> : visibleArticles.length === 0 ? <div className="py-8 text-sm leading-loose" style={{ color: 'var(--theme-muted)' }}>
+                      <p>让一个想法，慢慢成为一篇。</p>
+                      <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onNewArticle}>新建篇目</button>
+                    </div> : visibleArticles.map(doc => (
+                      <ArticleCard key={doc.filename} current={currentFilename === doc.filename}
+                        article={{ filename: doc.filename, title: displayTitle(doc.filename, parseDocument(doc.filename, doc.content).title), content: parseDocument(doc.filename, doc.content).body, created: doc.created, created_date: documentDate(doc), modified: doc.modified, tags: doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body) }}
+                        onOpen={onDateClick} onTag={selectTag} dateMode={articleSort} />
+                    ))}
+                  </motion.div>
+                ) : viewMode === 'timeline' ? (
                   <motion.div
                     key="timeline"
                     initial={reduceMotion ? false : { opacity: 0 }}
@@ -550,170 +627,11 @@ export const TimelineSidebar: React.FC<{
                       scrollTimerRef.current = setTimeout(() => setIsScrolling(false), 800);
                     }}
                   >
-                    {inRangeMode ? (
-                      /* 区间日记浏览模式：朋友圈式时间流（数据由 App 加载传入） */
-                      <div>
-                        <div
-                          className="flex items-center gap-2 px-8 pb-3 select-none"
-                          style={{ color: 'var(--theme-text)' }}
-                        >
-                          <div className="text-xs font-mono whitespace-nowrap opacity-50">
-                            {rangeLabel}
-                          </div>
-                          <button
-                            onClick={closeRangeMode}
-                            className="opacity-40 hover:opacity-100 cursor-pointer transition-opacity"
-                            title="退出区间浏览"
-                          >
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M18 6 6 18" />
-                              <path d="m6 6 12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                        {rangeLoading || rangeError || !rangeDocs?.length ? (
-                          <div role="status" className="text-[13px] mt-10 px-8 opacity-50" style={{ color: 'var(--theme-text)' }}>
-                            {rangeLoading ? '正在加载…' : rangeError ?? '这个区间还没有笔记'}
-                          </div>
-                        ) : rangeDocs ? (
-                        <div className="relative pl-8 pr-4">
-                          {/* 时光辅助线：贯穿竖线，紧贴容器左侧 */}
-                          <div
-                            className="absolute left-0 top-0 bottom-0 w-[1px]"
-                            style={{ backgroundColor: 'var(--theme-text)', opacity: 0.1 }}
-                          />
-                          {rangeDocs!.map((doc) => (
-                            <div key={doc.date} className="relative mb-12 group pl-6">
-                              {/* 时间轴圆点：绝对定位，与竖线重合 */}
-                              <div
-                                className="absolute -left-[30px] top-1.5 w-2 h-2 -translate-x-1/2 rounded-full transition-opacity duration-300 group-hover:opacity-40"
-                                style={{ backgroundColor: 'var(--theme-text)', opacity: 0.15 }}
-                              />
-                              <div
-                                onClick={() => onDateClick?.(doc.date)}
-                                title="点击跳转到该天的日记"
-                                className="text-xs font-mono tracking-wide opacity-80 hover:opacity-100 transition-opacity cursor-pointer w-fit"
-                                style={{ color: 'var(--theme-text)' }}
-                              >
-                                {doc.date}
-                              </div>
-                              <div className="mt-3">
-                                <p
-                                  onClick={() => onDateClick?.(doc.date)}
-                                  title="点击跳转到原文"
-                                  className="text-[13px] leading-[1.8] tracking-[0.01em] line-clamp-3 cursor-pointer hover:opacity-70 transition-opacity"
-                                  style={{ color: 'var(--theme-text)' }}
-                                >
-                                  {doc.content}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        ) : null}
-                      </div>
-                    ) : records.length === 0 ? (
-                      <div className="text-sm mt-10" style={{ color: 'var(--theme-muted)' }}>
-                        暂无记录...
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        {/* 贯穿时光轴 */}
-                        <div
-                          className="absolute left-6 top-0 bottom-0 w-px"
-                          style={{ backgroundColor: 'var(--theme-text)', opacity: 0.1 }}
-                        />
-                        {records.map((record) => (
-                          <div key={record.date} className="relative mb-16 group pl-9">
-                            {/* 轴线刻度圆点（居中对齐时光轴） */}
-                            <div
-                              className="absolute left-6 top-1 w-2 h-2 -translate-x-1/2 rounded-full transition-opacity duration-300 group-hover:opacity-40"
-                              style={{ backgroundColor: 'var(--theme-text)', opacity: 0.15 }}
-                            />
-                            {/* 块级图钉操作 */}
-                            {onPinDate && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onPinDate(record.date);
-                                }}
-                                title="图钉"
-                                className="absolute right-0 top-0 p-1.5 opacity-0 group-hover:opacity-30 hover:opacity-80 transition-opacity duration-300"
-                                style={{ color: 'var(--theme-text)' }}
-                              >
-                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M12 17v5" />
-                                  <path d="M9 10.76V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4.76a2 2 0 0 0 .59 1.41l1.7 1.7A1 1 0 0 1 17.6 15H6.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 8 10.76Z" />
-                                </svg>
-                              </button>
-                            )}
-                            {/* 时间戳标记 */}
-                            <div
-                              onClick={() => onDateClick?.(record.date)}
-                              title="点击跳转到该天的日记"
-                              className="text-xs font-mono tracking-wide opacity-80 hover:opacity-100 transition-opacity cursor-pointer w-fit"
-                              style={{ color: 'var(--theme-text)' }}
-                            >
-                              {record.date}
-                            </div>
-                            <div className="mt-5 space-y-6">
-                              {(() => {
-                                const displayedTags = [...(record.tags || [])];
-                                return displayedTags.map(({ tag, blocks }) => {
-                                  return (
-                                    <div key={tag} className="group mb-8">
-                                      <div
-                                        onClick={() => { setActiveTag(tag); setViewMode('tag'); }}
-                                        className="text-[12px] font-mono font-bold mb-3 tracking-widest cursor-pointer inline-flex items-center gap-1 transition-opacity hover:opacity-70 opacity-60"
-                                        style={{ color: 'var(--theme-text)' }}
-                                        title={`查看 #${tag} 的全部记录`}
-                                      >
-                                        #{tag} <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-sans">→</span>
-                                      </div>
-                                      <div className="space-y-4">
-                                        {(() => {
-                                          const parsedBlocks = blocks.map((content, originalIndex) => {
-                                            const timeMatch = (content || '').match(/^(\d{2}:\d{2})\s*([\s\S]*)/);
-                                            return {
-                                              content,
-                                              timeLabel: timeMatch?.[1] ?? null,
-                                              textContent: timeMatch ? timeMatch[2] : content,
-                                              originalIndex
-                                            };
-                                          });
-
-                                          parsedBlocks.sort((a, b) => {
-                                            if (a.timeLabel && b.timeLabel) {
-                                              const timeCmp = a.timeLabel.localeCompare(b.timeLabel);
-                                              if (timeCmp !== 0) return timeCmp;
-                                            }
-                                            return a.originalIndex - b.originalIndex;
-                                          });
-
-                                          return parsedBlocks.map((b) => {
-                                            const firstLine = b.content.split('\n')[0].trim();
-                                            const searchText = firstLine ? firstLine : `#${tag}`;
-                                            return (
-                                              <ExpandableTextBlock key={b.originalIndex} timeLabel={b.timeLabel} textContent={b.textContent} onClick={() => {
-                                                if (onSelectResult) {
-                                                  onSelectResult(record.date, searchText);
-                                                } else {
-                                                  onBlockClick?.(searchText);
-                                                }
-                                              }} />
-                                            );
-                                          });
-                                        })()}
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              })()}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {rangeLoading || rangeError ? (
+                      <div role="status" className="py-8 text-sm" style={{ color: 'var(--theme-muted)' }}>{rangeLoading ? '正在加载…' : rangeError}</div>
+                    ) : visibleRecords.length === 0 ? (
+                      <div className="py-8 text-sm" style={{ color: 'var(--theme-muted)' }}>{inRangeMode ? '这个区间还没有笔记' : '暂无记录…'}</div>
+                    ) : <RecallTimeline days={visibleRecords} onOpen={onDateClick} onSelectResult={onSelectResult} onTag={selectTag} onBrowseDate={browseDate} />}
                   </motion.div>
                 ) : viewMode === 'all-tags' ? (
                   <motion.div
@@ -756,7 +674,7 @@ export const TimelineSidebar: React.FC<{
                     className="absolute inset-0"
                   >
                     {activeTag && (
-                      <TagPerspectiveView tag={activeTag} onBlockClick={onBlockClick} onDateClick={onDateClick} onSelectResult={onSelectResult} />
+                      <TagPerspectiveView key={activeTag} tag={activeTag} revision={tagsRev} range={recallRange} onBrowseDate={browseDate} onBlockClick={onBlockClick} onDateClick={onDateClick} onSelectResult={onSelectResult} />
                     )}
                   </motion.div>
                 )}

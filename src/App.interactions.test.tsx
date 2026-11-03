@@ -73,6 +73,33 @@ afterEach(() => {
 });
 
 describe('App overlay interactions', () => {
+  it('browses articles by creation period without replacing the writing document', async () => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const timestamp = Math.floor(now.getTime() / 1000);
+    const article = { filename: 'article-recent.md', title: '本周开始的篇目', content: '正文', created: timestamp, modified: timestamp, created_date: today, tags: ['研究'] };
+    const oldArticle = { ...article, filename: 'article-old.md', title: '本周修改的旧篇目', created: 1577923200, created_date: '2020-01-02' };
+    ipc.mockImplementation(async command => {
+      if (command === 'load_document') return '';
+      if (command === 'get_timeline_data') return [
+        { date: today, tags: [], articles: [article] },
+        { date: '2020-01-02', tags: [], articles: [oldArticle] },
+      ];
+      return [];
+    });
+    await renderReadyApp();
+    const initialLoads = ipc.mock.calls.filter(([command]) => command === 'load_document').length;
+    fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
+    const search = await screen.findByRole('dialog', { name: '搜索笔记' });
+    fireEvent.click(within(search).getByRole('button', { name: '查看本周' }));
+    expect(await screen.findByText('创作时间 · 本周')).toBeInTheDocument();
+    expect(await screen.findByText('本周开始的篇目')).toBeInTheDocument();
+    expect(screen.queryByText('本周修改的旧篇目')).not.toBeInTheDocument();
+    expect(ipc.mock.calls.filter(([command]) => command === 'load_document')).toHaveLength(initialLoads);
+    expect(screen.getByRole('textbox', { name: '笔记编辑器' })).toBeEnabled();
+  });
+
+
   it('reports an empty current week with a transient toast, without a persistent error alert', async () => {
     await renderReadyApp();
     fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));

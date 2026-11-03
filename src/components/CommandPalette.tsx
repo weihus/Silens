@@ -8,6 +8,9 @@ import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSe
 export interface SearchResult {
   id: string;
   date: string;
+  filename?: string;
+  title?: string;
+  kind?: 'journal' | 'article';
   snippet: string;
   context_preview: string;
 }
@@ -19,7 +22,9 @@ interface CommandPaletteProps {
   editor?: any;
   currentFilename?: string | null;
   onTagManaged?: () => void;
-  onSelectResult?: (date: string, searchText: string) => void;
+  onSelectResult?: (date: string, searchText: string) => boolean | void | Promise<boolean | void>;
+  onNewArticle?: () => void;
+  onToday?: () => void;
   onQuickJump?: (preset?: 'yesterday' | 'this-week' | 'this-month', customRange?: { start?: string; end?: string }) => void;
   onLoadDocument?: (content: string, filename: string, targetSearchText?: string) => void;
 }
@@ -48,12 +53,27 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onOpenChange,
   onSelectResult,
   onQuickJump,
+  onNewArticle,
+  onToday,
 }) => {
   const reducedMotion = useReducedMotion();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
+  const [navigationFailed, setNavigationFailed] = useState(false);
+  const selectResult = useCallback((result: SearchResult, searchText: string) => {
+    const finish = (opened: boolean | void) => {
+      if (opened === false) { setNavigationFailed(true); return; }
+      setQuery('');
+      setResults([]);
+      onOpenChange(false);
+    };
+    setNavigationFailed(false);
+    const opened = onSelectResult?.(result.filename ?? result.date, searchText);
+    if (opened instanceof Promise) void opened.then(finish).catch(() => setNavigationFailed(true));
+    else finish(opened);
+  }, [onSelectResult, onOpenChange]);
   // 自定义日期零状态（PartialDate：年/月/日 独立可编辑，任意部分有值即可提交）
   const [customMode, setCustomMode] = useState(false);
   const [customStart, setCustomStart] = useState<PartialDate>({});
@@ -70,6 +90,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   // 零状态：时光穿梭快捷选项（查询为空时渲染，键盘可导航，回车触发）
   const QUICK_JUMP_ACTIONS = [
+    ...(onNewArticle ? [{ id: 'new-article', label: '新建篇目', action: onNewArticle }] : []),
+    ...(onToday ? [{ id: 'today', label: '回到今天', action: onToday }] : []),
     { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
     { id: 'this-week', label: '查看本周', action: () => onQuickJump?.('this-week') },
     { id: 'this-month', label: '查看本月', action: () => onQuickJump?.('this-month') },
@@ -147,7 +169,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             e.preventDefault();
             const selected = QUICK_JUMP_ACTIONS[selectedIndex];
             if (selected) selected.action();
-            if (selected?.id !== 'custom-range') {
+            if (selected && !['custom-range', 'new-article', 'today'].includes(selected.id)) {
               setQuery('');
               onOpenChange(false);
             }
@@ -168,14 +190,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         e.preventDefault();
         const selected = results[selectedIndex];
         if (selected) {
-          if (onSelectResult) onSelectResult(selected.date, query);
-          setQuery('');
-          setResults([]);
-          onOpenChange(false);
+          selectResult(selected, query);
         }
       }
     },
-    [query, results, selectedIndex, onOpenChange, onSelectResult, onQuickJump, customMode]
+    [query, results, selectedIndex, onOpenChange, selectResult, onQuickJump, onNewArticle, onToday, customMode]
   );
 
   // 4. 列表滚动跟随 (Scroll into view)
@@ -238,6 +257,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               </div>
 
             {/* 零状态：时光穿梭快捷选项（输入为空时渲染，输入任意字符即卸载） */}
+            {navigationFailed && <p role="alert" className="px-5 pb-3 text-sm" style={{ color: 'var(--theme-muted)' }}>未能打开笔记，当前内容保持不变。</p>}
             {query.trim() === '' ? (
               <div className="border-t" style={{ borderColor: 'var(--theme-border)' }}>
                 {customMode ? (
@@ -303,7 +323,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                           key={item.id}
                           onClick={() => {
                             item.action();
-                            if (item.id !== 'custom-range') onOpenChange(false);
+                            if (!['custom-range', 'new-article', 'today'].includes(item.id)) onOpenChange(false);
                           }}
                           onMouseEnter={() => setSelectedIndex(idx)}
                           className="w-full px-3 py-2.5 rounded-md text-left text-[13px] text-inherit transition-colors duration-150"
@@ -326,19 +346,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                       <button
                         type="button"
                         key={res.id || idx}
-                        aria-label={`${res.date} ${res.snippet}`}
-                        onClick={() => {
-                          if (onSelectResult) onSelectResult(res.date, query);
-                          setQuery('');
-                          setResults([]);
-                          onOpenChange(false);
-                        }}
+                        aria-label={`${res.title || res.date} ${res.snippet}`}
+                        onClick={() => selectResult(res, query)}
                         onMouseEnter={() => setSelectedIndex(idx)}
                         className="w-full shrink-0 px-3 py-3 rounded-md text-left text-inherit flex flex-col gap-1.5 transition-colors duration-150"
                         style={{ backgroundColor: idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}
                       >
                         <div className="text-[10px] opacity-45">
-                          {res.date}
+                          {res.title || res.date}
                         </div>
                         <div className="text-[13px] leading-relaxed line-clamp-2">
                           <HighlightText text={res.snippet} query={query} />

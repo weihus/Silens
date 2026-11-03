@@ -2,6 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backlinks;
+mod documents;
+mod note_times;
+use note_times::NoteTimes;
 use backlinks::query_backlinks;
 
 use chrono::Local;
@@ -74,16 +77,23 @@ fn save_note(dir: &Path, filename: &str, content: &str, expected: Option<&str>) 
     document_filename(Some(filename), "")?;
     let path = dir.join(filename);
     check_expected(&path, expected)?;
+    let mut registry = note_times::load(dir)?;
+    note_times::ensure(dir, filename, &mut registry)?;
     atomic_write_checked(&path, content.as_bytes(), Some(expected))
 }
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Document {
     filename: String,
+    kind: String,
+    journal_date: Option<String>,
+    tags: Vec<String>,
     title: String,
     content: String,
+    created: i64,
+    created_date: String,
     modified: i64,
 }
 
@@ -146,9 +156,7 @@ fn save_document(
     let today = Local::now().format("%Y-%m-%d").to_string();
     let filename = document_filename(current_filename.as_deref(), &today)?;
     save_note(&target_dir, &filename, &content, expected_content.as_deref())?;
-    if let Ok(conn) = get_db_connection(&app) {
-        let _ = index_document(&conn, filename.trim_end_matches(".md"), &content);
-    }
+    refresh_saved_index(&app, &filename, &content);
     Ok(filename)
 }
 
@@ -163,15 +171,30 @@ fn save_file_as(
     let target_dir = get_active_workspace(&app)?;
     let filename = if filename.ends_with(".md") { filename } else { format!("{}.md", filename) };
     save_note(&target_dir, &filename, &content, None)?;
-    if let Ok(conn) = get_db_connection(&app) {
-        let _ = index_document(&conn, filename.trim_end_matches(".md"), &content);
-    }
+    refresh_saved_index(&app, &filename, &content);
     Ok(())
+}
+
+fn refresh_saved_index(app: &tauri::AppHandle, filename: &str, content: &str) {
+    let result = (|| {
+        let workspace = get_active_workspace(app)?;
+        let registry = note_times::load(&workspace)?;
+        let times = note_times::get(&workspace, filename, &registry)?;
+        let conn = get_db_connection(app)?;
+        index_document(&conn, documents::stem(filename), content, &times)
+    })();
+    if let Err(error) = result {
+        log::warn!("Document saved but index update failed: {}", error);
+        let _ = app.emit("silens-index-warning", "文字已保存，搜索索引暂未更新，可稍后重新打开应用重建。");
+    }
 }
 
 #[tauri::command]
 async fn get_all_documents(app: tauri::AppHandle) -> Result<Vec<Document>, String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let target_dir = get_active_workspace(&app)?;
+    let registry = note_times::ensure_workspace(&target_dir)?;
 
     if !target_dir.exists() {
         return Ok(vec![]);
@@ -179,7 +202,7 @@ async fn get_all_documents(app: tauri::AppHandle) -> Result<Vec<Document>, Strin
 
     let mut documents = Vec::new();
 
-    for entry in WalkDir::new(&target_dir)
+    for entry in WalkDir::new(&target_dir).max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -195,27 +218,26 @@ async fn get_all_documents(app: tauri::AppHandle) -> Result<Vec<Document>, Strin
             None => continue,
         };
 
-        let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-        let modified = metadata
-            .modified()
-            .map(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64
-            })
-            .unwrap_or(0);
+        let times = note_times::get(&target_dir, &filename, &registry)?;
 
         let content = fs::read_to_string(path).unwrap_or_default();
         if content.is_empty() {
             continue;
         }
-        let title = filename.replace(".md", "");
+        let title = documents::title(&filename, &content);
+        let kind = documents::kind(&filename).to_owned();
+        let journal_date = (kind == "journal").then(|| filename[..10].to_owned());
 
         documents.push(Document {
             filename,
+            kind,
+            journal_date,
+            tags: documents::tags(documents::split(&content).1),
             title,
             content,
-            modified,
+            created: times.created,
+            created_date: times.created_date,
+            modified: times.modified,
         });
     }
 
@@ -320,7 +342,7 @@ fn update_tag_in_documents(
 
     let mut updated_files = Vec::new();
 
-    for entry in WalkDir::new(&target_dir)
+    for entry in WalkDir::new(&target_dir).max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -338,7 +360,8 @@ fn update_tag_in_documents(
         let next_content = replace_tag_in_content(&content, from, to);
 
         if next_content != content {
-            atomic_write_checked(path, next_content.as_bytes(), Some(Some(&content)))?;
+            save_note(&target_dir, &filename, &next_content, Some(&content))?;
+            refresh_saved_index(&app, &filename, &next_content);
             updated_files.push(filename);
         }
     }
@@ -355,7 +378,7 @@ fn delete_tag_from_documents(app: tauri::AppHandle, tag: &str) -> Result<Vec<Str
 
     let mut updated_files = Vec::new();
 
-    for entry in WalkDir::new(&target_dir)
+    for entry in WalkDir::new(&target_dir).max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -373,7 +396,8 @@ fn delete_tag_from_documents(app: tauri::AppHandle, tag: &str) -> Result<Vec<Str
         let next_content = remove_tag_from_content(&content, tag);
 
         if next_content != content {
-            atomic_write_checked(path, next_content.as_bytes(), Some(Some(&content)))?;
+            save_note(&target_dir, &filename, &next_content, Some(&content))?;
+            refresh_saved_index(&app, &filename, &next_content);
             updated_files.push(filename);
         }
     }
@@ -405,56 +429,74 @@ fn delete_tag(app: tauri::AppHandle, tag: String) -> Result<Vec<String>, String>
 pub struct DayRecord {
     pub date: String,
     pub tags: Vec<TagGroup>,
+    pub articles: Vec<RecallArticle>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TagGroup {
     pub tag: String,
+    pub filename: String,
     pub blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecallArticle {
+    pub filename: String,
+    pub title: String,
+    pub content: String,
+    pub created: i64,
+    pub modified: i64,
+    pub created_date: String,
+    pub tags: Vec<String>,
 }
 
 #[tauri::command]
 async fn get_timeline_data(app: tauri::AppHandle) -> Result<Vec<DayRecord>, String> {
-    let conn = get_db_connection(&app)?;
+    query_timeline(&get_db_connection(&app)?)
+}
 
-    // 1. 通过 SQL 一次性完成 排序、匹配与提取。按日期倒序，按物理位置(id)正序
+fn query_timeline(conn: &rusqlite::Connection) -> Result<Vec<DayRecord>, String> {
     let mut stmt = conn.prepare(
-        "SELECT b.date, t.name, b.content 
-         FROM blocks b
-         JOIN block_tags bt ON b.id = bt.block_id
-         JOIN tags t ON bt.tag_id = t.id
-         ORDER BY b.date DESC, b.id ASC"
+        "SELECT d.created_date, d.stem, d.kind, d.title, d.created, d.modified,
+                b.content, t.name
+         FROM documents d JOIN blocks b ON b.date = d.stem
+         LEFT JOIN block_tags bt ON bt.block_id = b.id
+         LEFT JOIN tags t ON t.id = bt.tag_id
+         ORDER BY d.created_date DESC, d.created DESC, b.id ASC, t.name ASC"
     ).map_err(|e| e.to_string())?;
-
-    let rows_iter = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?, // date
-            row.get::<_, String>(1)?, // tag_name
-            row.get::<_, String>(2)?, // content
-        ))
-    }).map_err(|e| e.to_string())?;
-
-    // 2. 将扁平的 SQL 结果行，无缝转换为前端所需的树状 DayRecord 结构
+    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut records: Vec<DayRecord> = Vec::new();
-
-    for row_result in rows_iter {
-        if let Ok((date, tag_name, content)) = row_result {
-            if records.last().map(|r| r.date == date).unwrap_or(false) {
-                let last_record = records.last_mut().unwrap();
-                if let Some(tag_group) = last_record.tags.iter_mut().find(|t| t.tag == tag_name) {
-                    tag_group.blocks.push(content);
-                } else {
-                    last_record.tags.push(TagGroup { tag: tag_name, blocks: vec![content] });
-                }
-            } else {
-                records.push(DayRecord { 
-                    date, 
-                    tags: vec![TagGroup { tag: tag_name, blocks: vec![content] }] 
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let date: String = row.get(0).map_err(|e| e.to_string())?;
+        let filename = format!("{}.md", row.get::<_, String>(1).map_err(|e| e.to_string())?);
+        let kind: String = row.get(2).map_err(|e| e.to_string())?;
+        let content: String = row.get(6).map_err(|e| e.to_string())?;
+        let tag: Option<String> = row.get(7).map_err(|e| e.to_string())?;
+        if records.last().is_none_or(|day| day.date != date) {
+            records.push(DayRecord { date: date.clone(), tags: vec![], articles: vec![] });
+        }
+        let day = records.last_mut().unwrap();
+        if kind == "article" {
+            if !day.articles.iter().any(|article| article.filename == filename) {
+                day.articles.push(RecallArticle {
+                    filename: filename.clone(), title: row.get(3).map_err(|e| e.to_string())?,
+                    content, created: row.get(4).map_err(|e| e.to_string())?,
+                    modified: row.get(5).map_err(|e| e.to_string())?,
+                    created_date: date, tags: vec![],
                 });
+            }
+            let article = day.articles.iter_mut().find(|article| article.filename == filename).unwrap();
+            if let Some(tag) = tag {
+                if !article.tags.contains(&tag) { article.tags.push(tag); }
+            }
+        } else if let Some(tag) = tag {
+            if let Some(group) = day.tags.iter_mut().find(|group| group.tag == tag && group.filename == filename) {
+                group.blocks.push(content);
+            } else {
+                day.tags.push(TagGroup { tag, filename, blocks: vec![content] });
             }
         }
     }
-
     Ok(records)
 }
 
@@ -471,8 +513,11 @@ fn open_workspace_index(app: &tauri::AppHandle, workspace: &Path) -> Result<rusq
     fs::create_dir_all(&local_dir).map_err(|e| e.to_string())?;
     let db_path = local_dir.join(format!("{:016x}.db", hash.finish()));
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    initialize_index(&conn)?;
+    Ok(conn)
+}
 
-    // 开启外键约束，以支持 block 删除时级联删除关系表
+fn initialize_index(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| e.to_string())?;
 
     conn.execute(
@@ -504,13 +549,51 @@ fn open_workspace_index(app: &tauri::AppHandle, workspace: &Path) -> Result<rusq
         [],
     ).map_err(|e| e.to_string())?;
 
-    Ok(conn)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS documents (
+            stem TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL
+        )", [],
+    ).map_err(|e| e.to_string())?;
+
+    let columns: Vec<String> = conn.prepare("PRAGMA table_info(documents)").map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(1)).map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+    for (name, definition) in [("created", "INTEGER NOT NULL DEFAULT 0"),
+        ("modified", "INTEGER NOT NULL DEFAULT 0"), ("created_date", "TEXT NOT NULL DEFAULT ''")] {
+        if !columns.iter().any(|column| column == name) {
+            conn.execute(&format!("ALTER TABLE documents ADD COLUMN {} {}", name, definition), [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
-fn index_document(conn: &rusqlite::Connection, date: &str, content: &str) -> Result<(), String> {
-    // 先删除该日期的所有旧块（配合 foreign_keys = ON，block_tags 也会自动级联删除）
+fn index_document(conn: &rusqlite::Connection, date: &str, content: &str, times: &NoteTimes) -> Result<(), String> {
+    conn.execute_batch("SAVEPOINT document_index").map_err(|e| e.to_string())?;
+    match index_document_content(conn, date, content, times) {
+        Ok(()) => conn.execute_batch("RELEASE document_index").map_err(|e| e.to_string()),
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK TO document_index; RELEASE document_index");
+            Err(error)
+        }
+    }
+}
+
+fn index_document_content(conn: &rusqlite::Connection, date: &str, content: &str, times: &NoteTimes) -> Result<(), String> {
+    let filename = format!("{}.md", date);
+    let kind = documents::kind(&filename);
+    conn.execute("INSERT OR REPLACE INTO documents (stem, kind, title, created, modified, created_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![date, kind, documents::title(&filename, content), times.created, times.modified, times.created_date]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM blocks WHERE date = ?1", rusqlite::params![date])
         .map_err(|e| e.to_string())?;
+    if kind == "article" {
+        let body = documents::split(content).1;
+        let mut tags = documents::tags(body);
+        if tags.is_empty() { tags.push("默认".into()); }
+        return insert_index_block(conn, date, body, content, &tags);
+    }
 
     let mut current_block = String::new();
     let mut blocks = Vec::new();
@@ -562,7 +645,7 @@ fn index_document(conn: &rusqlite::Connection, date: &str, content: &str) -> Res
                     .find(is_tag_boundary)
                     .unwrap_or(trimmed[tag_body_start..].len());
 
-                if end_offset > 0 {
+                if end_offset > 0 && !trimmed[tag_body_start..].starts_with('#') {
                     found_tag = trimmed[tag_body_start..tag_body_start + end_offset].to_string();
                     let mut new_clean = trimmed[..abs_pos].trim_end().to_string();
                     let tail = trimmed[tag_body_start + end_offset..].trim_start();
@@ -580,30 +663,21 @@ fn index_document(conn: &rusqlite::Connection, date: &str, content: &str) -> Res
             cursor = abs_pos + 1;
         }
 
-        conn.execute(
-            "INSERT INTO blocks (date, content, raw_markdown) VALUES (?1, ?2, ?3)",
-            rusqlite::params![date, clean_content, block],
-        ).map_err(|e| e.to_string())?;
-
-        let block_id = conn.last_insert_rowid();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-            rusqlite::params![found_tag],
-        ).map_err(|e| e.to_string())?;
-
-        let tag_id: i64 = conn.query_row(
-            "SELECT id FROM tags WHERE name = ?1",
-            rusqlite::params![found_tag],
-            |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-
-        conn.execute(
-            "INSERT INTO block_tags (block_id, tag_id) VALUES (?1, ?2)",
-            rusqlite::params![block_id, tag_id],
-        ).map_err(|e| e.to_string())?;
+        insert_index_block(conn, date, &clean_content, &block, &[found_tag])?;
     }
 
+    Ok(())
+}
+
+fn insert_index_block(conn: &rusqlite::Connection, date: &str, content: &str, raw: &str, tags: &[String]) -> Result<(), String> {
+    conn.execute("INSERT INTO blocks (date, content, raw_markdown) VALUES (?1, ?2, ?3)",
+        rusqlite::params![date, content, raw]).map_err(|e| e.to_string())?;
+    let block_id = conn.last_insert_rowid();
+    for tag in tags {
+        conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag]).map_err(|e| e.to_string())?;
+        conn.execute("INSERT INTO block_tags (block_id, tag_id) SELECT ?1, id FROM tags WHERE name = ?2",
+            rusqlite::params![block_id, tag]).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -611,41 +685,45 @@ fn index_document(conn: &rusqlite::Connection, date: &str, content: &str) -> Res
 pub struct ShadowBlock {
     pub id: i64,
     pub date: String,
+    pub filename: String,
+    pub title: String,
+    pub kind: String,
     pub content: String,
     pub raw_markdown: String,
+    pub created: i64,
+    pub modified: i64,
 }
 
-#[tauri::command]
-async fn query_blocks_by_tag(app: tauri::AppHandle, tag: String) -> Result<Vec<ShadowBlock>, String> {
-    let conn = get_db_connection(&app)?;
-    
-    // 毫秒级多表联查，按日期倒序
+#[tauri::command(rename_all = "camelCase")]
+async fn query_blocks_by_tag(app: tauri::AppHandle, tag: String, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<ShadowBlock>, String> {
+    query_tag_blocks(&get_db_connection(&app)?, &tag, start_date.as_deref(), end_date.as_deref())
+}
+
+fn query_tag_blocks(conn: &rusqlite::Connection, tag: &str, start_date: Option<&str>, end_date: Option<&str>) -> Result<Vec<ShadowBlock>, String> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.date, b.content, b.raw_markdown 
+        "SELECT b.id, d.created_date, b.content, b.raw_markdown, d.title, d.kind, d.stem, d.created, d.modified
          FROM blocks b
+         JOIN documents d ON d.stem = b.date
          JOIN block_tags bt ON b.id = bt.block_id
          JOIN tags t ON bt.tag_id = t.id
-         WHERE t.name = ?1
-         ORDER BY b.date DESC"
+         WHERE t.name = ?1 AND (?2 IS NULL OR d.created_date >= ?2) AND (?3 IS NULL OR d.created_date <= ?3)
+         ORDER BY d.created_date DESC, d.created DESC, b.id ASC"
     ).map_err(|e| e.to_string())?;
 
-    let blocks_iter = stmt.query_map(rusqlite::params![tag], |row| {
+    let blocks_iter = stmt.query_map(rusqlite::params![tag, start_date, end_date], |row| {
         Ok(ShadowBlock {
             id: row.get(0)?,
             date: row.get(1)?,
             content: row.get(2)?,
             raw_markdown: row.get(3)?,
+            filename: format!("{}.md", row.get::<_, String>(6)?),
+            title: row.get(4)?,
+            kind: row.get(5)?,
+            created: row.get(7)?,
+            modified: row.get(8)?,
         })
     }).map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for block in blocks_iter {
-        if let Ok(b) = block {
-            result.push(b);
-        }
-    }
-
-    Ok(result)
+    blocks_iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -664,7 +742,7 @@ async fn search_docs_by_prefix(app: tauri::AppHandle, prefix: String) -> Result<
     }
     let prefix_lower = prefix.to_lowercase();
     let mut results: Vec<String> = Vec::new();
-    for entry in WalkDir::new(&target_dir)
+    for entry in WalkDir::new(&target_dir).max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -673,7 +751,7 @@ async fn search_docs_by_prefix(app: tauri::AppHandle, prefix: String) -> Result<
         if name.starts_with('.') || !name.ends_with(".md") {
             continue;
         }
-        let stem = name.trim_end_matches(".md");
+        let stem = documents::stem(&name);
         if stem.to_lowercase().starts_with(&prefix_lower) {
             results.push(stem.to_string());
         }
@@ -686,8 +764,13 @@ async fn search_docs_by_prefix(app: tauri::AppHandle, prefix: String) -> Result<
 pub struct SearchResult {
     pub id: String,
     pub date: String,
+    pub filename: String,
+    pub title: String,
+    pub kind: String,
     pub snippet: String,
     pub context_preview: String,
+    pub created: i64,
+    pub modified: i64,
 }
 
 #[tauri::command]
@@ -704,18 +787,20 @@ async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<Search
     
     // 极速匹配：限制最多返回 15 条结果保证渲染性能
     let mut stmt = conn.prepare(
-        "SELECT id, date, content FROM blocks WHERE content LIKE ?1 ORDER BY date DESC LIMIT 15"
+        "SELECT b.id, d.created_date, b.content, d.title, d.kind, d.stem, d.created, d.modified FROM blocks b JOIN documents d ON d.stem = b.date
+         WHERE b.content LIKE ?1 OR d.title LIKE ?1 ORDER BY d.created_date DESC, d.created DESC, b.id ASC LIMIT 15"
     ).map_err(|e| e.to_string())?;
 
     let rows = stmt.query_map(rusqlite::params![sql_query], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, i64>(6)?, row.get::<_, i64>(7)?))
     }).map_err(|e| e.to_string())?;
 
     let mut results = Vec::new();
     let query_lower = query_trim.to_lowercase();
 
     for row_result in rows.filter_map(Result::ok) {
-        let (id, date, content) = row_result;
+        let (id, date, body, title, kind, stem, created, modified) = row_result;
+        let content = if kind == "article" { format!("{}\n\n{}", title, body) } else { body };
         let content_lower = content.to_lowercase();
         
         // 提取摘要 (Snippet)：找到匹配词位置，前后各截取 25 字节
@@ -747,7 +832,7 @@ async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<Search
             let prev_suffix = if safe_end_prev < content.len() { "..." } else { "" };
             let final_preview = format!("{}{}{}", prev_prefix, context_preview, prev_suffix);
 
-            results.push(SearchResult { id: id.to_string(), date, snippet: format!("{}{}{}", prefix, compressed, suffix), context_preview: final_preview });
+            results.push(SearchResult { id: id.to_string(), filename: format!("{}.md", stem), date, title, kind, created, modified, snippet: format!("{}{}{}", prefix, compressed, suffix), context_preview: final_preview });
         }
     }
     Ok(results)
@@ -764,7 +849,7 @@ fn workspace_files(source: &Path, markdown_only: bool) -> Result<Vec<PathBuf>, S
         if entry.file_type().is_symlink() {
             return Err(format!("COPY_ERROR: symbolic link {}", entry.path().display()));
         }
-        if entry.file_type().is_file() && (!markdown_only || entry.path().extension().is_some_and(|e| e == "md")) {
+        if entry.file_type().is_file() && (!markdown_only || entry.path().extension().is_some_and(|e| e == "md") || entry.file_name() == note_times::REGISTRY) {
             files.push(entry.path().to_owned());
         }
     }
@@ -778,12 +863,15 @@ fn copy_workspace(source: &Path, target: &Path, markdown_only: bool) -> Result<(
 
 // Restoring overwrites files that differ. Migration keeps the safer refusal.
 fn copy_files(source: &Path, target: &Path, markdown_only: bool, overwrite: bool) -> Result<(), String> {
+    let source_registry = note_times::ensure_workspace(source)?;
+    let registry_path = source.join(note_times::REGISTRY);
     let files = workspace_files(source, markdown_only)?;
+    let registry_bytes = if files.contains(&registry_path) {
+        Some(fs::read(&registry_path).map_err(|e| format!("COPY_ERROR: {}", e))?)
+    } else { None };
     for path in &files {
-        let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
-        let bytes = fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))?;
-        // Check every existing component to prevent writing through target symlinks.
-        let relative = dest.strip_prefix(target).map_err(|e| e.to_string())?;
+        let relative = path.strip_prefix(source).map_err(|e| e.to_string())?;
+        let dest = target.join(relative);
         let mut component_path = target.to_owned();
         for component in relative.components() {
             component_path.push(component);
@@ -793,24 +881,44 @@ fn copy_files(source: &Path, target: &Path, markdown_only: bool, overwrite: bool
                 _ => {}
             }
         }
+        if path != &registry_path && dest.exists() && !overwrite
+            && fs::read(&dest).map_err(|e| format!("COPY_ERROR: {}", e))?
+                != fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))? {
+            return Err(format!("COPY_CONFLICT: {}", dest.display()));
+        }
+    }
+    fs::create_dir_all(target).map_err(|e| format!("COPY_ERROR: {}", e))?;
+    let mut target_registry = if overwrite { std::collections::BTreeMap::new() } else { note_times::ensure_workspace(target)? };
+    for path in files.iter().filter(|path| *path != &registry_path) {
+        let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
+        let bytes = fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))?;
+        let mut write_times = overwrite;
         if dest.exists() {
             let current = fs::read(&dest).map_err(|e| format!("COPY_ERROR: {}", e))?;
             if current != bytes {
                 if !overwrite { return Err(format!("COPY_CONFLICT: {}", dest.display())); }
                 atomic_write(&dest, &bytes)?;
+                write_times = true;
             }
         } else {
             fs::create_dir_all(dest.parent().unwrap()).map_err(|e| format!("COPY_ERROR: {}", e))?;
             let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&dest)
                 .map_err(|e| format!("COPY_ERROR: {}", e))?;
             file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| format!("COPY_ERROR: {}", e))?;
+            write_times = true;
+        }
+        if write_times {
+            let source_modified = fs::metadata(path).and_then(|meta| meta.modified()).map_err(|e| format!("COPY_ERROR: {}", e))?;
+            fs::OpenOptions::new().write(true).open(&dest)
+                .and_then(|file| file.set_times(fs::FileTimes::new().set_modified(source_modified)))
+                .map_err(|e| format!("COPY_ERROR: {}", e))?;
         }
         if fs::read(&dest).map_err(|e| e.to_string())? != bytes
             || fs::read(path).map_err(|e| e.to_string())? != bytes {
             return Err("COPY_ERROR: verification failed or source changed".into());
         }
     }
-    for path in &files {
+    for path in files.iter().filter(|path| *path != &registry_path) {
         let dest = target.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
         if fs::read(path).map_err(|e| format!("COPY_ERROR: {}", e))?
             != fs::read(dest).map_err(|e| format!("COPY_ERROR: {}", e))? {
@@ -820,19 +928,41 @@ fn copy_files(source: &Path, target: &Path, markdown_only: bool, overwrite: bool
     if workspace_files(source, markdown_only)? != files {
         return Err("COPY_ERROR: source file set changed".into());
     }
+    if let Some(bytes) = registry_bytes {
+        if fs::read(&registry_path).map_err(|e| format!("COPY_ERROR: {}", e))? != bytes {
+            return Err("COPY_ERROR: source creation times changed during copy".into());
+        }
+        if overwrite { target_registry = source_registry; }
+        else {
+            for (name, entry) in source_registry {
+                if source.join(&name).is_file() { target_registry.entry(name).or_insert(entry); }
+            }
+        }
+        let bytes = serde_json::to_vec_pretty(&target_registry).map_err(|e| e.to_string())?;
+        atomic_write(&target.join(note_times::REGISTRY), &bytes)?;
+    }
     Ok(())
 }
 
 fn rebuild_index_for_workspace(app: &tauri::AppHandle, workspace: &Path) -> Result<usize, String> {
     let mut conn = open_workspace_index(app, workspace)?;
+    rebuild_workspace_index(&mut conn, workspace)
+}
+
+fn rebuild_workspace_index(conn: &mut rusqlite::Connection, workspace: &Path) -> Result<usize, String> {
+    let registry = note_times::ensure_workspace(workspace)?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM blocks", []).map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM tags", []).map_err(|e| e.to_string())?;
-    let files = workspace_files(workspace, true)?;
+    tx.execute("DELETE FROM documents", []).map_err(|e| e.to_string())?;
+    let files: Vec<_> = workspace_files(workspace, true)?.into_iter()
+        .filter(|path| path.parent() == Some(workspace) && path.extension().is_some_and(|ext| ext == "md")
+            && !path.file_name().unwrap().to_string_lossy().starts_with('.')).collect();
     for path in &files {
         let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let stem = path.file_stem().and_then(|s| s.to_str()).ok_or("INVALID_FILENAME")?;
-        index_document(&tx, stem, &content)?;
+        let filename = path.file_name().and_then(|s| s.to_str()).ok_or("INVALID_FILENAME")?;
+        let times = note_times::get(workspace, filename, &registry)?;
+        index_document(&tx, documents::stem(filename), &content, &times)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(files.len())
@@ -888,7 +1018,8 @@ fn list_snapshots(backups: &Path) -> Result<Vec<BackupSnapshot>, String> {
     snapshot_dirs(backups)?.into_iter().map(|path| {
         let id = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
         let created = id.get(..19).unwrap_or("").replace('_', " ");
-        let files = workspace_files(&path, true)?.len();
+        let files = workspace_files(&path, true)?.iter()
+            .filter(|file| file.extension().is_some_and(|ext| ext == "md")).count();
         Ok(BackupSnapshot { id, created, files })
     }).collect()
 }
@@ -901,6 +1032,7 @@ fn restore_snapshot(workspace: &Path, backups: &Path, id: &str) -> Result<(), St
         return Err("BACKUP_NOT_FOUND: 未找到这份备份".into());
     }
     snapshot_workspace(workspace, backups)?;
+    note_times::ensure_workspace(&snapshot)?;
     let incoming = workspace_files(&snapshot, false)?;
     copy_files(&snapshot, workspace, false, true)?;
     for path in workspace_files(workspace, false)? {
@@ -976,6 +1108,10 @@ async fn create_backup(app: tauri::AppHandle) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn test_times() -> NoteTimes {
+        NoteTimes { created: 100, modified: 200, created_date: "2026-11-02".into() }
+    }
+
     struct TempDir(PathBuf);
     impl TempDir {
         fn new() -> Self {
@@ -986,6 +1122,35 @@ mod tests {
     }
     impl Drop for TempDir {
         fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn document_stems_remain_unique_for_double_extensions() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        for filename in ["笔记.md", "笔记.md.md"] {
+            index_document(&conn, documents::stem(filename), "# 同名内容\n\n正文", &test_times()).unwrap();
+        }
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM documents", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(documents::title("笔记.md.md", "正文"), "笔记.md");
+    }
+
+    #[test]
+    fn articles_index_as_one_document_and_roll_back_failed_reindex() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        index_document(&conn, "article-123", "# 原题\n\n#研究 第一段\n\n\n\n#论文 第二段\n\n`#代码`", &test_times()).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM blocks", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+        let tags: Vec<String> = conn.prepare("SELECT name FROM tags ORDER BY name").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(tags, vec!["研究", "论文"]);
+        index_document(&conn, "2026-11-02_旧记录", "#随记 第一段\n\n\n\n第二段", &test_times()).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM blocks WHERE date = '2026-11-02_旧记录'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        conn.execute_batch("CREATE TRIGGER fail_index BEFORE INSERT ON blocks BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(index_document(&conn, "article-123", "# 新题\n\n新内容", &test_times()).is_err());
+        assert_eq!(conn.query_row("SELECT title FROM documents WHERE stem = 'article-123'", [], |row| row.get::<_, String>(0)).unwrap(), "原题");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM block_tags bt JOIN blocks b ON b.id = bt.block_id WHERE b.date = 'article-123'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]
@@ -1079,12 +1244,166 @@ mod tests {
         assert_eq!(fs::read_to_string(safety_dir.join("kept.md")).unwrap(), "current");
     }
 
+    fn set_mtime(path: &Path, seconds: u64) {
+        fs::OpenOptions::new().write(true).open(path).unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))).unwrap();
+    }
+
+    fn times_for(dir: &Path, filename: &str) -> NoteTimes {
+        note_times::get(dir, filename, &note_times::load(dir).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn old_article_creation_survives_atomic_saves_and_rebuilds() {
+        let dir = TempDir::new();
+        let path = dir.0.join("old.md");
+        fs::write(&path, "original").unwrap();
+        set_mtime(&path, 1000);
+        save_note(&dir.0, "old.md", "first", Some("original")).unwrap();
+        let first = times_for(&dir.0, "old.md");
+        assert_eq!(first.created, 1000);
+        assert!(first.modified > 1000);
+        set_mtime(&path, 2000);
+        save_note(&dir.0, "old.md", "second", Some("first")).unwrap();
+        let second = times_for(&dir.0, "old.md");
+        assert_eq!(second.created, first.created);
+        assert!(second.modified > 2000);
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        for _ in 0..2 {
+            assert_eq!(rebuild_workspace_index(&mut conn, &dir.0).unwrap(), 1);
+            let indexed: (i64, i64, String) = conn.query_row("SELECT created, modified, created_date FROM documents", [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+            assert_eq!(indexed, (second.created, second.modified, second.created_date.clone()));
+        }
+    }
+
+    #[test]
+    fn journals_use_filename_day_and_bad_registry_preserves_text() {
+        use chrono::TimeZone;
+        let dir = TempDir::new();
+        save_note(&dir.0, "2020-01-02_old.md", "original", None).unwrap();
+        let times = times_for(&dir.0, "2020-01-02_old.md");
+        assert_eq!(times.created_date, "2020-01-02");
+        assert_eq!(times.created, Local.with_ymd_and_hms(2020, 1, 2, 0, 0, 0).earliest().unwrap().timestamp());
+        fs::write(dir.0.join(note_times::REGISTRY), "{broken").unwrap();
+        assert!(save_note(&dir.0, "2020-01-02_old.md", "replacement", Some("original")).is_err());
+        assert_eq!(read_document(&dir.0.join("2020-01-02_old.md")).unwrap(), "original");
+        assert_eq!(fs::read_to_string(dir.0.join(note_times::REGISTRY)).unwrap(), "{broken");
+        assert_eq!(documents::kind("2020-02-30.md"), "article");
+    }
+
+    #[test]
+    fn merging_workspaces_combines_creation_records_without_touching_existing_times() {
+        let source = TempDir::new();
+        let target = TempDir::new();
+        fs::write(source.0.join("source.md"), "source note").unwrap();
+        fs::write(target.0.join("target.md"), "target note").unwrap();
+        fs::write(source.0.join("same.md"), "same content").unwrap();
+        fs::write(target.0.join("same.md"), "same content").unwrap();
+        set_mtime(&source.0.join("same.md"), 300);
+        set_mtime(&target.0.join("same.md"), 400);
+        atomic_write(&source.0.join(note_times::REGISTRY), br#"{"source.md":{"created":1000},"same.md":{"created":3000}}"#).unwrap();
+        atomic_write(&target.0.join(note_times::REGISTRY), br#"{"target.md":{"created":2000},"same.md":{"created":4000}}"#).unwrap();
+        copy_workspace(&source.0, &target.0, true).unwrap();
+        let registry = note_times::load(&target.0).unwrap();
+        assert_eq!(registry.len(), 3);
+        assert_eq!(registry["source.md"].created, 1000);
+        assert_eq!(registry["target.md"].created, 2000);
+        assert_eq!(registry["same.md"].created, 4000);
+        assert_eq!(note_times::get(&target.0, "same.md", &registry).unwrap().modified, 400);
+    }
+
+    #[test]
+    fn conflicting_migration_does_not_seed_target_with_source_creation_time() {
+        let source = TempDir::new();
+        let target = TempDir::new();
+        fs::write(source.0.join("old.md"), "source content").unwrap();
+        fs::write(target.0.join("old.md"), "target content").unwrap();
+        atomic_write(&source.0.join(note_times::REGISTRY), br#"{"old.md":{"created":1000}}"#).unwrap();
+        assert!(copy_workspace(&source.0, &target.0, true).unwrap_err().starts_with("COPY_CONFLICT"));
+        assert!(!target.0.join(note_times::REGISTRY).exists());
+        assert_eq!(fs::read_to_string(target.0.join("old.md")).unwrap(), "target content");
+        let registry = note_times::ensure_workspace(&target.0).unwrap();
+        assert_ne!(registry["old.md"].created, 1000);
+    }
+
+    #[test]
+    fn migration_backup_restore_preserve_times_and_note_counts() {
+        let source = TempDir::new();
+        let target = TempDir::new();
+        let backups = TempDir::new();
+        fs::write(source.0.join("old.md"), "old text").unwrap();
+        set_mtime(&source.0.join("old.md"), 123456);
+        copy_workspace(&source.0, &target.0, true).unwrap();
+        let original = times_for(&source.0, "old.md");
+        let copied = times_for(&target.0, "old.md");
+        assert_eq!((copied.created, copied.modified), (original.created, original.modified));
+        assert!(target.0.join(note_times::REGISTRY).is_file());
+        let snapshot = snapshot_workspace(&target.0, &backups.0).unwrap();
+        assert_eq!(list_snapshots(&backups.0).unwrap()[0].files, 1);
+        // Identical bytes must still regain the snapshot's mtime.
+        set_mtime(&target.0.join("old.md"), 654321);
+        restore_snapshot(&target.0, &backups.0, snapshot.file_name().unwrap().to_str().unwrap()).unwrap();
+        let restored = times_for(&target.0, "old.md");
+        assert_eq!((restored.created, restored.modified), (original.created, original.modified));
+        assert_eq!(fs::metadata(target.0.join("old.md")).unwrap().modified().unwrap(),
+            fs::metadata(source.0.join("old.md")).unwrap().modified().unwrap());
+    }
+
+    #[test]
+    fn timeline_includes_article_days_and_deduplicates_tags_and_sources() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        let old = NoteTimes { created: 100, modified: 900, created_date: "2020-01-01".into() };
+        let newer = NoteTimes { created: 200, modified: 800, created_date: "2020-01-02".into() };
+        index_document(&conn, "only.md", "# Title\n\n#研究 #论文 Body", &newer).unwrap();
+        index_document(&conn, "mixed", "# Mixed\n\n#研究 Body", &old).unwrap();
+        index_document(&conn, "2020-01-01", "#研究 journal #其他", &old).unwrap();
+        index_document(&conn, "2020-01-01_extra", "#研究 another", &old).unwrap();
+        let days = query_timeline(&conn).unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].date, "2020-01-02");
+        assert!(days[0].tags.is_empty());
+        assert_eq!(days[0].articles.len(), 1);
+        assert_eq!(days[0].articles[0].filename, "only.md.md");
+        assert_eq!(days[0].articles[0].content, "#研究 #论文 Body");
+        assert_eq!(days[0].articles[0].tags, vec!["研究", "论文"]);
+        assert_eq!(days[1].articles.len(), 1);
+        assert_eq!(days[1].tags.len(), 2);
+        assert_ne!(days[1].tags[0].filename, days[1].tags[1].filename);
+        assert!(days[1].tags.iter().all(|group| group.tag == "研究"));
+        let all = query_tag_blocks(&conn, "研究", None, None).unwrap();
+        assert_eq!(all.len(), 4);
+        assert_eq!(all[0].filename, "only.md.md");
+        assert_eq!(all[0].date, "2020-01-02");
+        assert_eq!((all[0].created, all[0].modified), (200, 800));
+        let filtered = query_tag_blocks(&conn, "研究", Some("2020-01-01"), Some("2020-01-01")).unwrap();
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].kind, "article");
+    }
+
+    #[test]
+    fn existing_index_schema_is_upgraded() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE documents (stem TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL);").unwrap();
+        initialize_index(&conn).unwrap();
+        initialize_index(&conn).unwrap();
+        index_document(&conn, "old", "body", &test_times()).unwrap();
+        assert_eq!(conn.query_row("SELECT created FROM documents", [], |row| row.get::<_, i64>(0)).unwrap(), 100);
+    }
+
     #[test]
     fn test_document_serialization() {
         let doc = Document {
             filename: "test.md".into(),
+            kind: "article".into(),
+            journal_date: None,
+            tags: vec![],
             title: "Title".into(),
             content: "Content".into(),
+            created: 123456000,
+            created_date: "1973-11-29".into(),
             modified: 123456789,
         };
         let serialized = serde_json::to_string(&doc).unwrap();
@@ -1138,6 +1457,8 @@ fn main() {
                 }
                 fs::write(&marker, b"1")?;
             }
+            let state = app.state::<StorageLock>();
+            let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
             if let Ok(workspace) = get_active_workspace(app.handle()) {
                 if let Err(e) = rebuild_index_for_workspace(app.handle(), &workspace) {
                     log::warn!("Index rebuild failed: {}", e);

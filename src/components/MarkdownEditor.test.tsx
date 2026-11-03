@@ -47,7 +47,7 @@ describe('MarkdownEditor regressions with a real editor', () => {
   beforeEach(() => {
     cleanup();
     onChange.mockClear();
-    mockInvoke.mockResolvedValue(['Alpha']);
+    mockInvoke.mockResolvedValue([{ filename: 'Alpha.md', title: 'Alpha', content: '', modified: 1, kind: 'article', journal_date: null }]);
     Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
     Range.prototype.getBoundingClientRect = () => new DOMRect();
   });
@@ -121,6 +121,17 @@ describe('MarkdownEditor regressions with a real editor', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
     act(() => { editor.commands.setContent(''); editor.commands.insertContent({ type: 'text', text: '[[zzzzzz' }); });
     expect(screen.queryByRole('listbox')).toBeNull();
+  });
+  it('keeps a double-extension article link distinct from the shorter filename', async () => {
+    mockInvoke.mockResolvedValue([
+      { filename: '笔记.md', title: '普通文件', content: '# 普通文件', modified: 1 },
+      { filename: '笔记.md.md', title: '双扩展名', content: '# 双扩展名', modified: 1 },
+    ]);
+    await mount();
+    act(() => editor.commands.insertContent({ type: 'text', text: '[[' }));
+    const suggestion = await screen.findByRole('option', { name: '双扩展名' });
+    fireEvent.mouseDown(suggestion);
+    expect(editor.getText()).toContain('[[笔记.md.md|双扩展名]]');
   });
 });
 
