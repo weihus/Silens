@@ -22,7 +22,7 @@ This kit describes the **current development build**. For features available in 
 >
 > Open the app and you're in today's daily note, ready to capture a thought without filling in a title. When you want a standalone piece, use the sidebar + or choose New titled note from Cmd/Ctrl + K. Its title and body live together in one Markdown file, and changing the title keeps the filename stable.
 >
-> Time and tags bring both kinds of writing together. Daily notes return as individual blocks; titled pieces return with a title and summary. Your date range carries across views, and browsing leaves your current document in place until you choose a result to open.
+> Time and tags bring both kinds of writing together. Start with this month, flip through weeks, months, or years, or jump straight to a past period. Daily notes return as individual blocks; titled pieces return with a title and summary. Expand busy days, open a month from the year overview, and return to where you left off. The selected range carries across views, and your current document stays in place until you open a result.
 >
 > Both share the same quiet canvas: an interface that fades while you type, an Ichigo-ichie focus mode and timer, and optional Rain, Fire, or Night soundscapes. Wiki links and backlinks help you follow connections between notes. When you're ready to share, export as Markdown, TXT, PNG, or JPG, with the title included for titled pieces.
 >
@@ -34,7 +34,7 @@ This kit describes the **current development build**. For features available in 
 
 - **Begin with today's page** — Launch straight into `YYYY-MM-DD.md` and capture a thought. Create a titled piece through the sidebar + or New titled note in Cmd/Ctrl + K when you want a separate document.
 - **Give longer pieces their own space** — A titled note stores its title as the first H1 alongside its body in one `article-UUID.md` file. Renaming the title preserves the filename and links; exports include the title.
-- **Rediscover through time and tags** — Review daily-note blocks and whole titled pieces through shared creation-date filters. Keep the selected range across time, tag, and titled-note views. The separate Continue writing entry opens titled notes in Recently modified order, with creation-date sorting available too. Open a result when you're ready to read its full text.
+- **Rediscover by week, month, year, and tag** — Start with this month, browse adjacent periods, or select a date directly. Month view expands busy days; year view groups months and lets you open one and return. Creation-date ranges carry across time, tag, and titled-note views, and reopening the sidebar during the same app session restores your place. Continue writing lists titled notes within the selected range in Recently modified order, with creation-date sorting available too.
 - **Stay with your writing** — Both forms share the fading interface, Ichigo-ichie focus mode, timer, and typewriter scrolling, with themes and optional ambient sound to suit your session.
 - **Follow connections and search** — Use Wiki links, `[[file|label]]` aliases, and backlinks that display source titles. Cmd/Ctrl + K brings up search with contextual previews.
 - **Keep portable Markdown files** — Autosave checks for external changes before overwriting. Verified snapshots and workspace migration carry notes and their creation-date registry together. Export Markdown, TXT, PNG, or JPG; use a sync folder when you want your chosen provider to handle cross-device transfers.

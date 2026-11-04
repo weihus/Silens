@@ -24,6 +24,7 @@ import { useThemeCSS } from './hooks/useThemeCSS';
 import { decodeEmptyLines } from './utils/emptyLines';
 import { displayTitle, documentKind, parseDocument } from './utils/documents';
 import type { RecallDay, RecallRange } from './types';
+import { periodLabel, periodRange, type RecallPeriod } from './utils/recall';
 import { SlidersHorizontal, Columns, Search, ArrowLeft } from 'lucide-react';
 
 const themeConfigs: Record<Theme, { bg: string; text: string; muted: string }> = {
@@ -146,9 +147,10 @@ export default function App() {
   }, [setPanelOpenState]);
   const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen || restoreOpen;
   const visibleSidebar = sidebarOpen && !dialogOpen;
-  const [recallRange, setRecallRange] = useState<RecallRange | null>(null);
+  const [recallPeriod, setRecallPeriod] = useState<RecallPeriod | null>(() => ({ unit: 'month', anchor: todayKey() }));
+  const [recallRange, setRecallRange] = useState<RecallRange | null>(() => periodRange({ unit: 'month', anchor: todayKey() }));
   const [timeViewRequest, setTimeViewRequest] = useState(0);
-  const [rangeLabel, setRangeLabel] = useState<string | null>(null);
+  const [rangeLabel, setRangeLabel] = useState<string | null>(() => periodLabel({ unit: 'month', anchor: todayKey() }));
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeError, setRangeError] = useState<string | null>(null);
   const rangeRequest = useRef(0);
@@ -291,8 +293,6 @@ export default function App() {
     if (storageBusy || loading) return;
     if (!await openDocument(`article-${crypto.randomUUID()}.md`, true)) return;
     setTargetSearchText(null);
-    setRecallRange(null);
-    setRangeLabel(null);
     setPaletteOpen(false);
     if (!sidebarPinned) setSidebarOpen(false);
   }, [storageBusy, loading, openDocument, setPaletteOpen, sidebarPinned, setSidebarOpen]);
@@ -317,12 +317,23 @@ export default function App() {
     return () => window.removeEventListener('silens-link-click', handleLink);
   }, [switchToDocument, storageBusy]);
 
-  const jumpToCustomRange = useCallback(async (start?: string, end?: string, label?: string) => {
+  const changeRecallPeriod = useCallback((period: RecallPeriod) => {
+    rangeRequest.current += 1;
+    setRecallPeriod(period);
+    setRecallRange(periodRange(period));
+    setRangeLabel(periodLabel(period));
+    setRangeLoading(false);
+    setRangeError(null);
+  }, []);
+
+  const jumpToCustomRange = useCallback(async (start?: string, end?: string, label?: string, period?: RecallPeriod) => {
     if (!start && !end) return;
     const request = ++rangeRequest.current;
-    const range = { start: start ?? '1970-01-01', end: end ?? todayKey() };
+    const range = { start: start ?? '0001-01-01', end: end ?? todayKey() };
+    if (range.start > range.end) [range.start, range.end] = [range.end, range.start];
+    setRecallPeriod(period ?? null);
     setRecallRange(range);
-    setRangeLabel(label ?? (start && end ? `${start} – ${end}` : start ? `${start} 至今` : `截至 ${end}`));
+    setRangeLabel(label ?? (start && end ? `${range.start} – ${range.end}` : start ? `${start} 至今` : `截至 ${end}`));
     setRangeLoading(true);
     setRangeError(null);
     setSidebarOpen(true);
@@ -340,17 +351,14 @@ export default function App() {
     }
   }, [setSidebarOpen, setToast]);
 
-  const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month') => {
-    const today = todayKey();
+  const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month' | 'this-year') => {
     if (preset === 'yesterday') {
       await jumpToCustomRange(yesterdayKey(), yesterdayKey(), '昨天');
       return;
     }
-    const now = new Date();
-    if (preset === 'this-week') now.setDate(now.getDate() - ((now.getDay() || 7) - 1));
-    else now.setDate(1);
-    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    await jumpToCustomRange(start, today, preset === 'this-week' ? '本周' : '本月');
+    const period: RecallPeriod = { unit: preset === 'this-week' ? 'week' : preset === 'this-month' ? 'month' : 'year', anchor: todayKey() };
+    const range = periodRange(period);
+    await jumpToCustomRange(range.start, range.end, preset === 'this-week' ? '本周' : preset === 'this-month' ? '本月' : '本年', period);
   }, [jumpToCustomRange]);
 
   return (
@@ -544,11 +552,13 @@ export default function App() {
             else if (preset) void jumpToTimeRange(preset);
           }}
           recallRange={recallRange}
+          recallPeriod={recallPeriod}
+          onPeriodChange={changeRecallPeriod}
           externalForceTime={timeViewRequest}
           rangeLoading={rangeLoading}
           rangeError={rangeError}
           rangeLabel={rangeLabel}
-          onClearRange={() => { rangeRequest.current += 1; setRecallRange(null); setRangeLabel(null); setRangeError(null); setRangeLoading(false); }}
+          onClearRange={() => { rangeRequest.current += 1; setRecallPeriod(null); setRecallRange(null); setRangeLabel(null); setRangeError(null); setRangeLoading(false); }}
           onSelectResult={async (date, searchText) => {
             if (!(await switchToDocument(date, searchText)).date) return;
             if (!sidebarPinned) setSidebarOpen(false);

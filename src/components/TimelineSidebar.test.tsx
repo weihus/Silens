@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { periodLabel, periodRange, type RecallPeriod } from '../utils/recall';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
@@ -32,6 +34,89 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const props = { isOpen: true, setIsOpen: vi.fn(), tagsRev: 0, theme: 'paper' };
+
+function PeriodSidebar({ initial = { unit: 'month', anchor: '2026-11-04' } }: { initial?: RecallPeriod }) {
+  const [period, setPeriod] = useState(initial);
+  const [open, setOpen] = useState(true);
+  return <>
+    <button onClick={() => setOpen(true)}>重新打开回顾</button>
+    <TimelineSidebar {...props} isOpen={open} setIsOpen={setOpen} recallPeriod={period}
+      recallRange={periodRange(period)} rangeLabel={periodLabel(period)} onPeriodChange={setPeriod} />
+  </>;
+}
+
+it('flips empty months and directly selects a historical month without replacing the view', async () => {
+  render(<PeriodSidebar />);
+  await screen.findByText('新篇目');
+  fireEvent.click(screen.getByRole('button', { name: '上一月' }));
+  expect(await screen.findByText('这一月还没有记录')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '选择回顾周期' })).toHaveTextContent('2026 年 10 月');
+  fireEvent.click(screen.getByRole('button', { name: '下一月' }));
+  await screen.findByText('新篇目');
+  fireEvent.click(screen.getByRole('button', { name: '选择回顾周期' }));
+  fireEvent.change(screen.getByLabelText('选择月份'), { target: { value: '2020-01' } });
+  fireEvent.submit(screen.getByLabelText('选择月份').closest('form')!);
+  expect(await screen.findByText('旧篇目')).toBeInTheDocument();
+  expect(screen.queryByText('新篇目')).not.toBeInTheDocument();
+});
+
+it('keeps the selected tag when changing the period and updates the backend range', async () => {
+  render(<PeriodSidebar />);
+  await screen.findByText('新篇目');
+  fireEvent.click(screen.getByRole('button', { name: '标签' }));
+  fireEvent.click(await screen.findByRole('button', { name: /#研究/ }));
+  await screen.findByText('新篇目');
+  fireEvent.click(screen.getByRole('button', { name: '上一月' }));
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('query_blocks_by_tag', { tag: '研究', startDate: '2026-10-01', endDate: '2026-10-31' }));
+  expect(screen.getByRole('button', { name: '标签' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await screen.findByText('这个标签下还没有内容')).toBeInTheDocument();
+});
+
+it('groups a year into months and retains the return path while browsing months', async () => {
+  render(<PeriodSidebar initial={{ unit: 'year', anchor: '2026-01-01' }} />);
+  const month = await screen.findByRole('region', { name: '2026-11 的回顾' });
+  expect(screen.queryByText('旧篇目')).not.toBeInTheDocument();
+  fireEvent.click(within(month).getByRole('button', { name: '查看 11 月全部内容 →' }));
+  expect(screen.getByRole('button', { name: '月' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: '上一月' }));
+  fireEvent.click(screen.getByRole('button', { name: '返回 2026 年' }));
+  expect(await screen.findByRole('region', { name: '2026-11 的回顾' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '年' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('restores the timeline position after visiting a tag', async () => {
+  const view = render(<PeriodSidebar />);
+  await screen.findByText('新篇目');
+  fireEvent.scroll(view.container.querySelector('[data-recall-scroll]')!, { target: { scrollTop: 180 } });
+  fireEvent.click(screen.getByRole('button', { name: '标签' }));
+  fireEvent.click(await screen.findByRole('button', { name: /#研究/ }));
+  await screen.findByText('新篇目');
+  fireEvent.click(screen.getByRole('button', { name: '时间' }));
+  await screen.findByRole('region', { name: '2026-11-03 的笔记' });
+  expect(view.container.querySelector('[data-recall-scroll]')?.scrollTop).toBe(180);
+});
+
+it('expands a busy day in month view and retains expansion and scroll after reopening', async () => {
+  const busyDays = [{ ...days[0], tags: [{ filename: '2026-11-03.md', tag: '研究', blocks: ['随记一', '随记二', '随记三', '随记四'] }] }];
+  vi.mocked(invoke).mockImplementation(async command => command === 'get_timeline_data' ? busyDays : documents);
+  const view = render(<PeriodSidebar />);
+  await screen.findByText('新篇目');
+  expect(screen.queryByText('随记四')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '查看当天其余 2 条内容' }));
+  expect(screen.getByText('随记四')).toBeInTheDocument();
+  const scroller = view.container.querySelector('[data-recall-scroll]')!;
+  fireEvent.scroll(scroller, { target: { scrollTop: 240 } });
+  fireEvent.click(screen.getByRole('button', { name: '关闭时间与标签侧栏' }));
+  await waitFor(() => expect(screen.queryByRole('complementary')).not.toBeInTheDocument());
+  let resolve!: (value: RecallDay[]) => void;
+  vi.mocked(invoke).mockImplementation(async command => command === 'get_timeline_data' ? new Promise<RecallDay[]>(done => { resolve = done; }) : documents);
+  fireEvent.click(screen.getByRole('button', { name: '重新打开回顾' }));
+  await screen.findByText('正在加载…');
+  fireEvent.scroll(view.container.querySelector('[data-recall-scroll]')!, { target: { scrollTop: 0 } });
+  resolve(busyDays);
+  await screen.findByText('随记四');
+  expect(view.container.querySelector('[data-recall-scroll]')?.scrollTop).toBe(240);
+});
 
 it('shows articles and tagged journal fragments together on their creation days', async () => {
   const select = vi.fn();

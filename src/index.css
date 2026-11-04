@@ -186,6 +186,27 @@
   font-size: 11px;
 }
 .recall-date-button[aria-expanded='true'] { background: var(--theme-selection); color: var(--theme-text); }
+.recall-period { position: relative; margin: 0 24px 12px; color: var(--theme-muted); }
+.recall-period-units { display: flex; gap: 4px; padding: 3px; border-radius: 8px; background: color-mix(in srgb, var(--theme-text) 4%, transparent); }
+.recall-period-units button { flex: 1; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+.recall-period-units button[aria-pressed='true'] { color: var(--theme-text); background: var(--theme-selection); }
+.recall-period-heading { display: flex; align-items: center; gap: 3px; margin-top: 8px; }
+.recall-period-arrow { flex-shrink: 0; padding: 7px 4px; border-radius: 6px; }
+.recall-period-title { flex: 1; min-width: 0; padding: 7px 0; border-radius: 6px; font-size: 12px; color: var(--theme-text); line-height: 1.7; overflow-wrap: anywhere; }
+.recall-period-today { display: block; margin: 0 auto; padding: 3px 8px; font-size: 11px; border-radius: 6px; }
+.recall-period-picker { position: absolute; top: 100%; left: 0; right: 0; z-index: 60; padding: 14px; border: 1px solid var(--theme-border); border-radius: 8px; background: var(--theme-bg); box-shadow: 0 6px 20px #0000000a; }
+.recall-period-picker form { display: flex; flex-direction: column; gap: 12px; font-size: 12px; }
+.recall-period-picker input { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--theme-border); border-radius: 5px; background: transparent; color: var(--theme-text); }
+.recall-return-year { display: flex; align-items: center; gap: 6px; margin: 0 24px 10px; padding: 4px 0; color: var(--theme-muted); font-size: 11px; }
+.recall-timeline-compact section { margin-bottom: 28px; }
+.recall-timeline-compact .recall-note { margin-bottom: 16px; }
+.recall-timeline-compact .recall-note-title { font-size: 15px; }
+.recall-timeline-compact .recall-note-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
+.recall-expand-day, .recall-month-open { padding: 5px 0; color: var(--theme-muted); font-size: 12px; text-align: left; }
+.recall-month { padding: 0 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--theme-border); }
+.recall-month-heading { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 0; margin-bottom: 8px; font-size: 15px; }
+.recall-month-summary { font-size: 12px; color: var(--theme-muted); line-height: 1.8; overflow-wrap: anywhere; }
+.recall-year .recall-timeline-compact section { margin-bottom: 20px; }
 .recall-continue {
   display: flex;
   align-items: center;

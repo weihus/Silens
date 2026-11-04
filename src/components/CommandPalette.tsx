@@ -25,7 +25,7 @@ interface CommandPaletteProps {
   onSelectResult?: (date: string, searchText: string) => boolean | void | Promise<boolean | void>;
   onNewArticle?: () => void;
   onToday?: () => void;
-  onQuickJump?: (preset?: 'yesterday' | 'this-week' | 'this-month', customRange?: { start?: string; end?: string }) => void;
+  onQuickJump?: (preset?: 'yesterday' | 'this-week' | 'this-month' | 'this-year', customRange?: { start?: string; end?: string }) => void;
   onLoadDocument?: (content: string, filename: string, targetSearchText?: string) => void;
 }
 
@@ -95,6 +95,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
     { id: 'this-week', label: '查看本周', action: () => onQuickJump?.('this-week') },
     { id: 'this-month', label: '查看本月', action: () => onQuickJump?.('this-month') },
+    { id: 'this-year', label: '查看本年', action: () => onQuickJump?.('this-year') },
     {
       id: 'custom-range',
       label: '自定义日期...',

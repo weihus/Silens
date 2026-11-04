@@ -50,15 +50,15 @@ it('clears old search results immediately and ignores requests resolved after cl
   expect(screen.queryByText('正在搜索…')).toBeNull();
 });
 
-it('shows four quick action buttons without an empty preview and preserves keyboard navigation', () => {
+it('shows time quick actions without an empty preview and preserves keyboard navigation', () => {
   const jump = vi.fn();
   const close = vi.fn();
   render(<CommandPalette open onOpenChange={close} onQuickJump={jump} />);
   expect(screen.queryByRole('region', { name: '笔记预览' })).toBeNull();
   expect(screen.getAllByText('按时间回顾')).toHaveLength(1);
   expect(screen.queryByText('时光穿梭')).toBeNull();
-  expect(screen.getAllByRole('button')).toHaveLength(4);
-  for (const label of ['跳转到昨天', '查看本周', '查看本月', '自定义日期...']) {
+  expect(screen.getAllByRole('button')).toHaveLength(5);
+  for (const label of ['跳转到昨天', '查看本周', '查看本月', '查看本年', '自定义日期...']) {
     expect(screen.getByRole('button', { name: label })).toBeTruthy();
   }
   const input = screen.getByRole('textbox');
@@ -72,6 +72,7 @@ it.each([
   ['跳转到昨天', 'yesterday'],
   ['查看本周', 'this-week'],
   ['查看本月', 'this-month'],
+  ['查看本年', 'this-year'],
 ])('preserves the %s quick action button', (label, preset) => {
   const jump = vi.fn();
   const close = vi.fn();

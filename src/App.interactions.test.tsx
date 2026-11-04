@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Editor } from '@tiptap/react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { calendarDate, periodLabel, shiftPeriod } from './utils/recall';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import App from './App';
@@ -113,6 +114,26 @@ describe('App overlay interactions', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '笔记编辑器' })).toBeEnabled();
   }, 10000);
+
+  it('ignores a delayed quick-jump result after the user changes periods', async () => {
+    let resolve!: (days: unknown[]) => void;
+    let timelineCalls = 0;
+    ipc.mockImplementation(async command => {
+      if (command === 'load_document') return '';
+      if (command === 'get_timeline_data' && timelineCalls++ === 0) return new Promise(done => { resolve = done; });
+      return [];
+    });
+    await renderReadyApp();
+    fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看本月' }));
+    fireEvent.click(await screen.findByRole('button', { name: '上一月' }));
+    const expected = periodLabel(shiftPeriod({ unit: 'month', anchor: calendarDate(new Date().getTime() / 1000) }, -1));
+    expect(screen.getByRole('button', { name: '选择回顾周期' })).toHaveTextContent(expected);
+    await act(async () => { resolve([]); });
+    expect(screen.queryByText('本月还没有笔记')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择回顾周期' })).toHaveTextContent(expected);
+    expect(screen.getByRole('textbox', { name: '笔记编辑器' })).toBeEnabled();
+  });
 
   it('keeps settings and search mutually exclusive in both directions', async () => {
     await renderReadyApp();
