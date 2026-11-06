@@ -80,8 +80,8 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
 
   const getContent = useCallback(() => session.current?.content ?? '', []);
 
-  const open = useCallback(async (nextFilename: string, allowMissing = false, recovery?: 'reload' | 'preserve'): Promise<boolean> => {
-    if (!editor || busy.current) return false;
+  const open = useCallback(async (nextFilename: string, allowMissing = false, recovery?: 'reload' | 'preserve', isCurrent?: () => boolean): Promise<boolean> => {
+    if (!editor || busy.current || (isCurrent && !isCurrent())) return false;
     if (!recovery && session.current?.filename === nextFilename) return true;
     busy.current = true;
     setLoading(true);
@@ -103,6 +103,7 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
         content = await invoke<string>('load_document', { filename: nextFilename });
         saved = content;
       } catch (cause) {
+        if (isCurrent && !isCurrent()) return false;
         if (allowMissing && String(cause) === 'DOCUMENT_NOT_FOUND') {
           content = '';
           saved = null;
@@ -115,6 +116,7 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
           return false;
         }
       }
+      if (isCurrent && !isCurrent()) return false;
       const parsed = parseDocument(nextFilename, content);
       const encoded = encodeEmptyLines(parsed.body);
       applyEncodedContent(editor, encoded);

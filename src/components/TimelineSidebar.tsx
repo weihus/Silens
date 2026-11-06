@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { ArrowLeft, ArrowUpRight, CalendarDays, FilePenLine, Pin, Plus, X } from 'lucide-react';
-import type { Document, RecallDay, RecallRange } from '../types';
+import type { Document, RecallDay, RecallRange, ReflectionPerspective } from '../types';
 import { documentDate, withinRange, type RecallPeriod } from '../utils/recall';
 import { RecallPeriodNavigation } from './RecallPeriodNavigation';
 import { ArticleCard, RecallTimeline } from './RecallTimeline';
@@ -19,6 +19,7 @@ export interface ShadowBlock {
   kind: 'journal' | 'article';
   content: string;
   raw_markdown: string;
+  is_untagged?: boolean;
   created: number;
   modified: number;
 }
@@ -78,8 +79,11 @@ const MeasureItem: React.FC<{ index: number; onMeasure: (idx: number, h: number)
   return <div ref={ref} className="flow-root">{children}</div>;
 };
 
+type TagResultScope = { key: string };
+type TagResultStatus = { scope: TagResultScope; state: 'loading' | 'success' | 'error'; count: number };
+
 // 标签透视视图：搭载动态高度虚拟滚动 (Variable-height Virtualizer) 和极简时间刻度 (Scrubber)
-const TagPerspectiveView: React.FC<{ tag: string; revision: number; range?: RecallRange | null; getInitialScrollTop: () => number; getInitialHeights: () => Record<number, number>; onMeasureHeight: (id: number, height: number) => void; onScrollPosition: (position: number) => void; onBrowseDate: (date: string) => void; onBlockClick?: (text: string) => void; onDateClick?: (date: string) => void; onSelectResult?: (date: string, searchText: string) => void }> = ({ tag, revision, range, getInitialScrollTop, getInitialHeights, onMeasureHeight, onScrollPosition, onBrowseDate, onBlockClick, onDateClick, onSelectResult }) => {
+const TagPerspectiveView: React.FC<{ scope: TagResultScope; onStatus: (status: TagResultStatus) => void; tag: string; untaggedView?: boolean; revision: number; range?: RecallRange | null; getInitialScrollTop: () => number; getInitialHeights: () => Record<number, number>; onMeasureHeight: (id: number, height: number) => void; onScrollPosition: (position: number) => void; onBrowseDate: (date: string) => void; onBlockClick?: (text: string) => void; onDateClick?: (date: string) => void; onSelectResult?: (date: string, searchText: string) => void }> = ({ scope, onStatus, tag, untaggedView = false, revision, range, getInitialScrollTop, getInitialHeights, onMeasureHeight, onScrollPosition, onBrowseDate, onBlockClick, onDateClick, onSelectResult }) => {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [retry, setRetry] = useState(0);
@@ -96,21 +100,27 @@ const TagPerspectiveView: React.FC<{ tag: string; revision: number; range?: Reca
     let active = true;
     setLoading(true);
     setFailed(false);
-    invoke<ShadowBlock[]>('query_blocks_by_tag', { tag, ...(range?.start ? { startDate: range.start } : {}), ...(range?.end ? { endDate: range.end } : {}) }).then(result => {
+    onStatus({ scope, state: 'loading', count: 0 });
+    invoke<ShadowBlock[]>('query_blocks_by_tag', { tag, ...(untaggedView ? { untagged: true } : tag === '默认' ? { untagged: false } : {}), ...(range?.start ? { startDate: range.start } : {}), ...(range?.end ? { endDate: range.end } : {}) }).then(result => {
       if (!active) return;
       const seen = new Set<string>();
-      setBlocks(result.filter(block => {
+      const filtered = result.filter(block => {
         if (!withinRange(block.date, range)) return false;
         if (block.kind !== 'article') return true;
         const filename = block.filename ?? block.date;
         if (seen.has(filename)) return false;
         seen.add(filename);
         return true;
-      }).sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created || a.id - b.id));
+      }).sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created || a.id - b.id);
+      setBlocks(filtered);
       setLoading(false);
-    }).catch(() => { if (active) { setBlocks([]); setFailed(true); setLoading(false); } });
+      onStatus({ scope, state: 'success', count: filtered.length });
+    }).catch(() => { if (active) {
+      setBlocks([]); setFailed(true); setLoading(false);
+      onStatus({ scope, state: 'error', count: 0 });
+    } });
     return () => { active = false; };
-  }, [tag, revision, retry, range?.start, range?.end]);
+  }, [tag, untaggedView, revision, retry, range?.start, range?.end, scope, onStatus]);
 
   useLayoutEffect(() => {
     if (!loading && containerRef.current) containerRef.current.scrollTop = savedScrollTop.current;
@@ -235,7 +245,7 @@ const TagPerspectiveView: React.FC<{ tag: string; revision: number; range?: Reca
                   <button type="button" onClick={() => onBrowseDate(block.date)} className="quiet-button mb-4 rounded py-1 text-xs font-mono" style={{ color: 'var(--theme-muted)' }}>{block.date}</button>
                 )}
                 {block.kind === 'article' ? (
-                  <ArticleCard article={{ filename: block.filename, title: block.title || '未命名笔记', content: block.content, created: block.created, modified: block.modified, created_date: block.date, tags: extractTagsFromText(block.content) }} onOpen={onDateClick} dateMode="none" />
+                  <ArticleCard article={{ filename: block.filename, title: block.title || '未命名笔记', content: block.content, created: block.created, modified: block.modified, created_date: block.date, is_untagged: block.is_untagged, tags: extractTagsFromText(block.content) }} onOpen={onDateClick} dateMode="none" />
                 ) : <>
                 <ExpandableTextBlock
                   textContent={block.content}
@@ -321,7 +331,10 @@ export const TimelineSidebar: React.FC<{
   isPaletteOpen?: boolean;
   isPinned?: boolean;
   onTogglePin?: () => void;
-}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeLabel, rangeLoading = false, rangeError = null, onClearRange, theme, externalForceTag, onClearForceTag, isPinned = false, onTogglePin, onNewArticle, currentFilename, recallRange, externalForceTime, recallPeriod, onPeriodChange }) => {
+  reflectionOpen?: boolean;
+  onReflectionContextChange?: (perspective: ReflectionPerspective) => void;
+  onOpenReflection?: (perspective: ReflectionPerspective) => void;
+}> = ({ isOpen, setIsOpen, tagsRev, onBlockClick, onDateClick, onSelectResult, onJumpTime, rangeLabel, rangeLoading = false, rangeError = null, onClearRange, theme, externalForceTag, onClearForceTag, isPinned = false, onTogglePin, onNewArticle, currentFilename, recallRange, externalForceTime, recallPeriod, onPeriodChange, reflectionOpen = false, onReflectionContextChange, onOpenReflection }) => {
   const reduceMotion = useReducedMotion();
   const [records, setRecords] = useState<RecallDay[]>([]);
   const [viewMode, setViewMode] = useState<'timeline' | 'tag' | 'all-tags' | 'articles'>('timeline');
@@ -331,6 +344,22 @@ export const TimelineSidebar: React.FC<{
   const [dataFailed, setDataFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [untaggedView, setUntaggedView] = useState(false);
+  // Identity changes on reopen/revision, so retained arrays cannot authorize a new entry.
+  const dataScope = useMemo(() => ({ isOpen, tagsRev, retry }), [isOpen, tagsRev, retry]);
+  const [resolvedDataScope, setResolvedDataScope] = useState<typeof dataScope | null>(null);
+  const tagScope = useMemo<TagResultScope>(() => ({
+    key: JSON.stringify([isOpen, viewMode, activeTag, untaggedView, recallRange?.start, recallRange?.end, tagsRev]),
+  }), [isOpen, viewMode, activeTag, untaggedView, recallRange?.start, recallRange?.end, tagsRev]);
+  const currentTagScope = useRef(tagScope);
+  useLayoutEffect(() => { currentTagScope.current = tagScope; }, [tagScope]);
+  const [tagStatus, setTagStatus] = useState<TagResultStatus | null>(null);
+  const receiveTagStatus = useCallback((status: TagResultStatus) => {
+    if (status.scope === currentTagScope.current) setTagStatus(status);
+  }, []);
+  const reflectionPerspective = useMemo<ReflectionPerspective>(() => viewMode === 'articles' ? { kind: 'articlesOnly' }
+    : viewMode === 'tag' && activeTag ? untaggedView ? { kind: 'untagged' } : { kind: 'tag', tag: activeTag } : { kind: 'all' }, [viewMode, activeTag, untaggedView]);
+  useEffect(() => { onReflectionContextChange?.(reflectionPerspective); }, [reflectionPerspective, onReflectionContextChange]);
   const [isScrolling, setIsScrolling] = useState(false);
   const [showJumpPopover, setShowJumpPopover] = useState(false);
   const [customJumpMode, setCustomJumpMode] = useState(false);
@@ -340,7 +369,7 @@ export const TimelineSidebar: React.FC<{
   const scrollPositions = useRef(new Map<string, number>());
   const contentRef = useRef<HTMLDivElement>(null);
   const tagMeasurements = useRef(new Map<string, Record<number, number>>());
-  const scrollKey = `${viewMode}:${viewMode === 'tag' ? activeTag : ''}:${recallRange?.start ?? ''}:${recallRange?.end ?? ''}:${viewMode === 'articles' ? articleSort : ''}`;
+  const scrollKey = `${viewMode}:${viewMode === 'tag' ? `${untaggedView}:${activeTag}` : ''}:${recallRange?.start ?? ''}:${recallRange?.end ?? ''}:${viewMode === 'articles' ? articleSort : ''}`;
   const measurementKey = `${scrollKey}:${tagsRev}`;
   const rememberHeight = useCallback((id: number, height: number) => {
     if (!tagMeasurements.current.has(measurementKey)) tagMeasurements.current.set(measurementKey, {});
@@ -386,7 +415,8 @@ export const TimelineSidebar: React.FC<{
   const endHasAny = customEnd.year || customEnd.month || customEnd.day;
 
   const inRangeMode = rangeLabel != null;
-  const closeRangeMode = useCallback(() => { onClearRange?.(); }, [onClearRange]);
+  const closeRangeMode = useCallback(() => { setReturnYear(null); onClearRange?.(); }, [onClearRange]);
+  const hasPeriodHeading = Boolean(onPeriodChange && recallPeriod);
 
   const jumpPopoverRef = useRef<HTMLDivElement>(null);
   const dateButtonRef = useRef<HTMLButtonElement>(null);
@@ -433,10 +463,11 @@ export const TimelineSidebar: React.FC<{
         if (!active) return;
         setRecords(timeline);
         setArticles(docs.filter(doc => documentKind(doc.filename) === 'article'));
+        setResolvedDataScope(dataScope);
         setDataLoading(false);
       }).catch(() => { if (active) { setDataFailed(true); setDataLoading(false); } });
     return () => { active = false; };
-  }, [isOpen, tagsRev, retry]);
+  }, [isOpen, tagsRev, retry, dataScope]);
 
   useEffect(() => {
     if (externalForceTime) setViewMode('timeline');
@@ -455,12 +486,20 @@ export const TimelineSidebar: React.FC<{
   }, [visibleRecords]);
   const visibleArticles = useMemo(() => articles.filter(doc => withinRange(documentDate(doc), recallRange))
     .sort((a, b) => b[articleSort] - a[articleSort] || a.filename.localeCompare(b.filename)), [articles, recallRange, articleSort]);
-  const selectTag = useCallback((tag: string) => { setActiveTag(tag); setViewMode('tag'); }, []);
+  const reflectionCount = !isOpen ? 0
+    : viewMode === 'tag' ? tagStatus?.scope === tagScope && tagStatus.state === 'success' ? tagStatus.count : 0
+    : resolvedDataScope !== dataScope || dataLoading || dataFailed ? 0
+    : viewMode === 'articles' ? visibleArticles.length
+    : rangeLoading || rangeError ? 0
+    : visibleRecords.reduce((total, day) => total + day.articles.length + day.tags.reduce((sum, group) => sum + group.blocks.length, 0), 0);
+
+  const selectTag = useCallback((tag: string, untagged = false) => { setActiveTag(tag); setUntaggedView(untagged); setViewMode('tag'); }, []);
   const browseDate = useCallback((date: string) => { onJumpTime?.(undefined, { start: date, end: date }); }, [onJumpTime]);
 
   useEffect(() => {
     if (externalForceTag) {
       setActiveTag(externalForceTag);
+      setUntaggedView(false);
       setViewMode('tag');
       onClearForceTag?.();
     }
@@ -468,22 +507,28 @@ export const TimelineSidebar: React.FC<{
 
   // 全局标签使用频率统计
   const tagFrequencies = useMemo(() => {
-    const freqs: Record<string, number> = {};
+    type TagEntry = { perspective: Extract<ReflectionPerspective, { kind: 'tag' | 'untagged' }>; label: string; count: number };
+    const freqs = new Map<string, TagEntry>();
+    const add = (tag: string, untagged: boolean, count: number) => {
+      const key = untagged ? 'untagged' : `tag:${tag}`;
+      const entry = freqs.get(key);
+      if (entry) entry.count += count;
+      else freqs.set(key, { perspective: untagged ? { kind: 'untagged' } : { kind: 'tag', tag }, label: untagged ? '未命名的时刻' : `#${tag}`, count });
+    };
     visibleRecords.forEach(r => {
-      r.tags?.forEach(tg => {
-        freqs[tg.tag] = (freqs[tg.tag] || 0) + tg.blocks.length;
-      });
+      r.tags?.forEach(tg => add(tg.tag, tg.is_untagged ?? tg.tag === '默认', tg.blocks.length));
     });
     visibleArticles.forEach(doc => {
       const tags = doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body);
-      for (const tag of tags.length ? tags : ['默认']) freqs[tag] = (freqs[tag] || 0) + 1;
+      if (!tags.length) add('默认', true, 1);
+      else tags.forEach(tag => add(tag, false, 1));
     });
-    return Object.entries(freqs).sort((a, b) => b[1] - a[1]);
+    return [...freqs.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   }, [visibleRecords, visibleArticles]);
 
   return (
     <div
-      className={`timeline-sidebar fixed top-0 left-0 h-full z-[80] ${isOpen ? 'timeline-sidebar-open' : 'w-0'}`}
+      className={`timeline-sidebar fixed top-0 left-0 h-full z-[80] ${reflectionOpen ? 'timeline-sidebar-reflection' : ''} ${isOpen ? 'timeline-sidebar-open' : 'w-0'}`}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
           event.preventDefault();
@@ -622,7 +667,7 @@ export const TimelineSidebar: React.FC<{
                 </AnimatePresence>
               </div>
             </div>
-            {onPeriodChange && <RecallPeriodNavigation key={`${isOpen}:${recallPeriod?.unit ?? 'custom'}`} period={recallPeriod} fallbackAnchor={recallRange?.start} onChange={changePeriod} />}
+            {onPeriodChange && <RecallPeriodNavigation key={`${isOpen}:${recallPeriod?.unit ?? 'custom'}`} period={recallPeriod} fallbackAnchor={recallRange?.start} onChange={changePeriod} onClear={onClearRange ? closeRangeMode : undefined} />}
             {returnYear && recallPeriod?.unit === 'month' && recallPeriod.anchor.slice(0, 4) === returnYear.anchor.slice(0, 4) && <button type="button" className="quiet-button recall-return-year" onClick={() => {
               onPeriodChange?.(returnYear);
               setReturnYear(null);
@@ -636,23 +681,26 @@ export const TimelineSidebar: React.FC<{
             </button>
 
             {/* 动态透视容器：时间轴 vs 标签透视 */}
-            {inRangeMode && <div className="mb-3 flex items-center gap-2 px-8 text-xs" style={{ color: 'var(--theme-muted)' }}>
-              <span className="min-w-0 flex-1 break-words">创作时间 · {rangeLabel}</span>
+            {inRangeMode && !hasPeriodHeading && <div className="mb-3 flex items-center gap-2 px-8 text-xs" style={{ color: 'var(--theme-muted)' }}>
+              <span className="min-w-0 flex-1 break-words">{rangeLabel}</span>
               <button type="button" className="quiet-button rounded p-1" aria-label="清除时间筛选" onClick={closeRangeMode}><X size={13} /></button>
             </div>}
             {viewMode === 'tag' && activeTag && <div className="recall-tag-heading">
               <button type="button" className="quiet-button rounded p-1" aria-label="查看全部标签" onClick={() => setViewMode('all-tags')}><ArrowLeft size={14} /></button>
-              <span>#{activeTag}</span>
+              <span>{untaggedView ? '未命名的时刻' : `#${activeTag}`}</span>
             </div>}
             {(viewMode === 'timeline' || viewMode === 'all-tags') && (dataLoading || dataFailed) && (
               <div role="status" className="px-8 pb-3 text-xs" style={{ color: 'var(--theme-muted)' }}>
                 {dataLoading ? '正在加载…' : <button onClick={() => setRetry(n => n + 1)}>读取失败，点击重试</button>}
               </div>
             )}
+            {onOpenReflection && reflectionCount > 0 && <button type="button" className="reflection-entry quiet-button" aria-label="展开时光拾遗"
+              disabled={reflectionOpen} onClick={() => onOpenReflection(reflectionPerspective)}>
+              <span>拾遗这段时光 · {reflectionCount} 段记录</span><span>展卷 ↗</span>
+            </button>}
             <div ref={contentRef} className="flex-1 relative w-full h-full overflow-hidden">
-              <AnimatePresence mode="wait">
                 {viewMode === 'articles' ? (
-                  <motion.div ref={restoreScroll} data-recall-scroll onScroll={rememberScroll} key="articles" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 overflow-y-auto px-6 pb-24 custom-scrollbar">
+                  <motion.div ref={restoreScroll} data-recall-scroll onScroll={rememberScroll} key="articles" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 overflow-y-auto px-6 pb-24 custom-scrollbar">
                     <div className="recall-order" role="group" aria-label="篇目排序">
                       <button type="button" className="quiet-button rounded py-1" aria-pressed={articleSort === 'modified'} style={{ color: articleSort === 'modified' ? 'var(--theme-text)' : 'var(--theme-muted)' }} onClick={() => setArticleSort('modified')}>最近修改</button>
                       <button type="button" className="quiet-button rounded py-1" aria-pressed={articleSort === 'created'} style={{ color: articleSort === 'created' ? 'var(--theme-text)' : 'var(--theme-muted)' }} onClick={() => setArticleSort('created')}>创作时间</button>
@@ -662,18 +710,18 @@ export const TimelineSidebar: React.FC<{
                     </div> : visibleArticles.length === 0 ? <div className="py-8 text-sm leading-loose" style={{ color: 'var(--theme-muted)' }}>
                       <p>让一个想法，慢慢成为一篇。</p>
                       <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onNewArticle}>新建篇目</button>
-                    </div> : visibleArticles.map(doc => (
-                      <ArticleCard key={doc.filename} current={currentFilename === doc.filename}
-                        article={{ filename: doc.filename, title: displayTitle(doc.filename, parseDocument(doc.filename, doc.content).title), content: parseDocument(doc.filename, doc.content).body, created: doc.created, created_date: documentDate(doc), modified: doc.modified, tags: doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body) }}
-                        onOpen={onDateClick} onTag={selectTag} dateMode={articleSort} />
-                    ))}
+                    </div> : visibleArticles.map(doc => {
+                      const tags = doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body);
+                      return <ArticleCard key={doc.filename} current={currentFilename === doc.filename}
+                        article={{ filename: doc.filename, title: displayTitle(doc.filename, parseDocument(doc.filename, doc.content).title), content: parseDocument(doc.filename, doc.content).body, created: doc.created, created_date: documentDate(doc), modified: doc.modified, tags, is_untagged: tags.length === 0 }}
+                        onOpen={onDateClick} onTag={selectTag} dateMode={articleSort} />;
+                    })}
                   </motion.div>
                 ) : viewMode === 'timeline' ? (
                   <motion.div
                     key="timeline"
                     initial={reduceMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
                     transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className={`absolute inset-0 overflow-y-auto pl-12 pr-12 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
                     ref={restoreScroll}
@@ -698,7 +746,7 @@ export const TimelineSidebar: React.FC<{
                               setReturnYear(recallPeriod);
                               onPeriodChange?.({ unit: 'month', anchor: `${month}-01` });
                             }}>查看 {Number(month.slice(5))} 月全部内容 →</button>
-                          </> : <p className="recall-month-summary">{days.flatMap(day => [...day.articles.map(article => article.title), ...day.tags.map(group => `#${group.tag}`)]).filter((value, item, values) => values.indexOf(value) === item).slice(0, 3).join(' · ')}</p>}
+                          </> : <p className="recall-month-summary">{days.flatMap(day => [...day.articles.map(article => article.title), ...day.tags.map(group => (group.is_untagged ?? group.tag === '默认') ? '未命名的时刻' : `#${group.tag}`)]).filter((value, item, values) => values.indexOf(value) === item).slice(0, 3).join(' · ')}</p>}
                         </section>;
                       })}
                     </div> : <RecallTimeline days={visibleRecords} compact={recallPeriod?.unit === 'month'} expandedDays={expandedDays}
@@ -714,7 +762,6 @@ export const TimelineSidebar: React.FC<{
                     key="all-tags"
                     initial={reduceMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
                     transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className={`absolute inset-0 overflow-y-auto px-8 pb-24 custom-scrollbar timeline-scroll-container ${isScrolling ? 'is-scrolling' : 'is-idle'}`}
                     ref={restoreScroll}
@@ -722,14 +769,14 @@ export const TimelineSidebar: React.FC<{
                     onScroll={rememberScroll}
                   >
                     <div className="flex flex-col mt-2">
-                      {tagFrequencies.map(([t, count]) => (
+                      {tagFrequencies.map(({ perspective, label, count }) => (
                         <button
-                          key={t}
-                          onClick={() => { setActiveTag(t); setViewMode('tag'); }}
+                          key={perspective.kind === 'untagged' ? 'untagged' : `tag:${perspective.tag}`}
+                          onClick={() => selectTag(perspective.kind === 'tag' ? perspective.tag : '默认', perspective.kind === 'untagged')}
                           className="group flex items-center justify-between w-full py-3.5 border-b transition-colors hover:bg-black/5 dark:hover:bg-white/5 px-3 -mx-3 rounded-xl"
                           style={{ borderColor: 'rgba(150, 150, 150, 0.06)' }}
                         >
-                          <span className="text-[13px] tracking-widest transition-opacity opacity-80 group-hover:opacity-100" style={{ color: 'var(--theme-text)' }}>#{t}</span>
+                          <span className="text-[13px] tracking-widest transition-opacity opacity-80 group-hover:opacity-100" style={{ color: 'var(--theme-text)' }}>{label}</span>
                           <span className="text-xs font-mono opacity-30 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--theme-muted)' }}>{count}</span>
                         </button>
                       ))}
@@ -743,17 +790,15 @@ export const TimelineSidebar: React.FC<{
                     key="tag-perspective"
                     initial={reduceMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
                     transition={{ duration: reduceMotion ? 0 : 0.2, ease: 'easeOut' }}
                     className="absolute inset-0"
                   >
                     {activeTag && (
-                      <TagPerspectiveView key={`${activeTag}:${recallRange?.start}:${recallRange?.end}`} tag={activeTag} revision={tagsRev} range={recallRange}
+                      <TagPerspectiveView scope={tagScope} onStatus={receiveTagStatus} key={tagScope.key} tag={activeTag} untaggedView={untaggedView} revision={tagsRev} range={recallRange}
                         getInitialScrollTop={() => scrollPositions.current.get(scrollKey) ?? 0} getInitialHeights={() => ({ ...tagMeasurements.current.get(measurementKey) })} onMeasureHeight={rememberHeight} onScrollPosition={position => scrollPositions.current.set(scrollKey, position)} onBrowseDate={browseDate} onBlockClick={onBlockClick} onDateClick={onDateClick} onSelectResult={onSelectResult} />
                     )}
                   </motion.div>
                 )}
-              </AnimatePresence>
             </div>
           </motion.div>
         )}

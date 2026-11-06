@@ -4,7 +4,7 @@ import { calendarDate, exactTime } from '../utils/recall';
 export function ArticleCard({ article, onOpen, onTag, dateMode = 'created', current = false }: {
   article: RecallArticle;
   onOpen?: (filename: string) => void;
-  onTag?: (tag: string) => void;
+  onTag?: (tag: string, untagged?: boolean) => void;
   dateMode?: 'created' | 'modified' | 'none';
   current?: boolean;
 }) {
@@ -14,6 +14,7 @@ export function ArticleCard({ article, onOpen, onTag, dateMode = 'created', curr
   }).join('\n').replace(/^ {0,3}#{1,6}[\t ]+/gm, '').trim();
   const times = `创作：${exactTime(article.created)}\n最后修改：${exactTime(article.modified)}`;
   const timestamp = dateMode === 'modified' ? article.modified : article.created;
+  const untagged = article.is_untagged ?? (article.tags.length === 0 || (article.tags.length === 1 && article.tags[0] === '默认'));
   return (
     <div className="recall-note">
       <button type="button" aria-current={current ? 'page' : undefined} aria-description={times.replace('\n', '；')} title={times}
@@ -24,8 +25,9 @@ export function ArticleCard({ article, onOpen, onTag, dateMode = 'created', curr
           {dateMode === 'modified' ? `修改于 ${calendarDate(article.modified)}` : `创作于 ${article.created_date}`}
         </time>}
       </button>
-      {onTag && article.tags.length > 0 && <div className="recall-note-tags">
-        {article.tags.map(tag => <button key={tag} type="button" className="quiet-button rounded py-1" onClick={() => onTag(tag)}>#{tag}</button>)}
+      {onTag && (untagged || article.tags.length > 0) && <div className="recall-note-tags">
+        {untagged ? <button type="button" className="quiet-button rounded py-1" onClick={() => onTag('默认', true)}>未命名的时刻</button>
+          : article.tags.map(tag => <button key={tag} type="button" className="quiet-button rounded py-1" onClick={() => tag === '默认' ? onTag(tag, false) : onTag(tag)}>#{tag}</button>)}
       </div>}
     </div>
   );
@@ -35,7 +37,7 @@ export function RecallTimeline({ days, onOpen, onSelectResult, onTag, onBrowseDa
   days: RecallDay[];
   onOpen?: (filename: string) => void;
   onSelectResult?: (filename: string, searchText: string) => void;
-  onTag: (tag: string) => void;
+  onTag: (tag: string, untagged?: boolean) => void;
   onBrowseDate: (date: string) => void;
   compact?: boolean;
   expandedDays?: Set<string>;
@@ -64,9 +66,10 @@ export function RecallTimeline({ days, onOpen, onSelectResult, onTag, onBrowseDa
           <button type="button" className="quiet-button rounded py-1 text-xs font-mono tracking-wide" style={{ color: 'var(--theme-muted)' }} onClick={() => onBrowseDate(day.date)}>{day.date}<span className="ml-2">{weekday}</span></button>
           <div className="mt-5">
             {articles.map(article => <ArticleCard key={article.filename} article={article} onOpen={onOpen} onTag={onTag} dateMode="none" />)}
-            {groups.map(group => (
-              <div key={`${group.filename}:${group.tag}`} className="mb-8">
-                <button type="button" onClick={() => onTag(group.tag)} className="quiet-button mb-3 rounded py-1 text-xs tracking-wider" style={{ color: 'var(--theme-muted)' }}>#{group.tag}</button>
+            {groups.map(group => {
+              const untagged = group.is_untagged ?? group.tag === '默认';
+              return <div key={`${group.filename}:${group.tag}:${untagged}`} className="mb-8">
+                <button type="button" onClick={() => untagged ? onTag(group.tag, true) : group.tag === '默认' ? onTag(group.tag, false) : onTag(group.tag)} className="quiet-button mb-3 rounded py-1 text-xs tracking-wider" style={{ color: 'var(--theme-muted)' }}>{untagged ? '未命名的时刻' : `#${group.tag}`}</button>
                 <div className="space-y-4">
                   {group.blocks.map(({ content, index }) => {
                     const time = content.match(/^(\d{2}:\d{2})\s*([\s\S]*)/);
@@ -78,8 +81,8 @@ export function RecallTimeline({ days, onOpen, onSelectResult, onTag, onBrowseDa
                     </button>;
                   })}
                 </div>
-              </div>
-            ))}
+              </div>;
+            })}
             {compact && !preview && count > 3 && <button type="button" className="quiet-button recall-expand-day" aria-expanded={!!expanded} onClick={() => onToggleDay?.(day.date)}>
               {expanded ? '收起当天内容' : `查看当天其余 ${count - 3} 条内容`}
             </button>}

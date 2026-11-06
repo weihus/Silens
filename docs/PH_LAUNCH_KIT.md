@@ -24,6 +24,8 @@ This kit describes the **current development build**. For features available in 
 >
 > Time and tags bring both kinds of writing together. Start with this month, flip through weeks, months, or years, or jump straight to a past period. Daily notes return as individual blocks; titled pieces return with a title and summary. Expand busy days, open a month from the year overview, and return to where you left off. The selected range carries across views, and your current document stays in place until you open a result.
 >
+> A reflection scroll brings a chosen period together as a letter: the days you wrote, works you returned to, pieces you kept developing, and excerpts to rediscover. It is assembled locally, opens above your current draft, and can be saved as a full PNG or JPG letter. If you want an AI afterword, preview the selected context and approve that single request; AI is off by default.
+>
 > Both share the same quiet canvas: an interface that fades while you type, an Ichigo-ichie focus mode and timer, and optional Rain, Fire, or Night soundscapes. Wiki links and backlinks help you follow connections between notes. When you're ready to share, export as Markdown, TXT, PNG, or JPG, with the title included for titled pieces.
 >
 > Silens stores your writing as local Markdown files, with verified snapshots and workspace migration. If you choose a cloud-synced folder, your sync provider handles transfers between devices.
@@ -35,6 +37,8 @@ This kit describes the **current development build**. For features available in 
 - **Begin with today's page** — Launch straight into `YYYY-MM-DD.md` and capture a thought. Create a titled piece through the sidebar + or New titled note in Cmd/Ctrl + K when you want a separate document.
 - **Give longer pieces their own space** — A titled note stores its title as the first H1 alongside its body in one `article-UUID.md` file. Renaming the title preserves the filename and links; exports include the title.
 - **Rediscover by week, month, year, and tag** — Start with this month, browse adjacent periods, or select a date directly. Month view expands busy days; year view groups months and lets you open one and return. Creation-date ranges carry across time, tag, and titled-note views, and reopening the sidebar during the same app session restores your place. Continue writing lists titled notes within the selected range in Recently modified order, with creation-date sorting available too.
+- **Read a letter from your past** — Open a local reflection scroll for a date range or tag, revisit selected excerpts, and save a full PNG or JPG letter. Closing restores your writing position; source cards open the original notes.
+- **Choose an AI afterword** — An optional local model or cloud service can add a title and epilogue after you preview the context and confirm each request. Generated prose stays in the current scroll and image export.
 - **Stay with your writing** — Both forms share the fading interface, Ichigo-ichie focus mode, timer, and typewriter scrolling, with themes and optional ambient sound to suit your session.
 - **Follow connections and search** — Use Wiki links, `[[file|label]]` aliases, and backlinks that display source titles. Cmd/Ctrl + K brings up search with contextual previews.
 - **Keep portable Markdown files** — Autosave checks for external changes before overwriting. Verified snapshots and workspace migration carry notes and their creation-date registry together. Export Markdown, TXT, PNG, or JPG; use a sync folder when you want your chosen provider to handle cross-device transfers.
@@ -96,6 +100,10 @@ Before saving, Silens compares disk content with the last loaded or saved conten
 **Can I move or sync my workspace?**
 
 Workspace migration copies and verifies files before switching, retains the originals, and stops on conflicting destination content. Identical destination files can be reused; a failed migration may leave files already copied. Your chosen sync provider handles cross-device transfers. Silens does not merge concurrent edits or guarantee their detection. Backups stay in `Documents/Silens_Backups`; if `Documents` is cloud-managed, these may also be synced.
+
+**Does reflection require AI?**
+
+The reflection scroll is assembled locally from your notes and works without AI. An optional afterword supports a loopback model service or an HTTPS cloud endpoint. Each request requires reviewing the complete sanitized user-context JSON, capped at 1,500 Unicode characters, and confirming generation. The payload includes selected statistics, titles, and excerpts; excerpts may contain personal information, so the preview lets you inspect them before sending. Cloud keys use the system credential store. Generated prose is cleared when the scroll closes and is never written into your notes.
 
 **How do updates work?**
 

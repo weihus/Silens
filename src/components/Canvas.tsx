@@ -18,6 +18,7 @@ interface CanvasProps {
   onConsumedTargetSearchText: () => void;
   isSidebarOpen?: boolean;
   disabled?: boolean;
+  suspended?: boolean;
   filename: string | null;
   title?: string;
   onTitleChange?: (value: string) => void;
@@ -25,7 +26,7 @@ interface CanvasProps {
   onNavigate: (filename: string, searchText: NoteTarget) => void;
 }
 
-export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false, filename, title = '', onTitleChange, notesRevision, onNavigate }: CanvasProps) {
+export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEditorReady, isFocusMode, knownTags, targetSearchText, onConsumedTargetSearchText, isSidebarOpen, disabled = false, suspended = false, filename, title = '', onTitleChange, notesRevision, onNavigate }: CanvasProps) {
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const handleEditorReady = useCallback((editor: Editor) => {
@@ -33,6 +34,13 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
     onEditorReady(editor);
   }, [onEditorReady]);
   const lastFilename = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const current = editorRef.current;
+    if (!suspended || !current) return;
+    const editable = current.isEditable;
+    current.setEditable(false, false);
+    return () => { if (!current.isDestroyed) current.setEditable(editable, false); };
+  }, [suspended]);
   const article = !!filename && documentKind(filename) === 'article';
   useLayoutEffect(() => {
     const input = titleRef.current;
@@ -78,7 +86,7 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
         }, 300);
       }}
     >
-      <div className="canvas-writing-area" inert={disabled}>
+      <div className="canvas-writing-area" inert={disabled || suspended}>
         <div className="h-24" />
         <div data-note-content>
         {article && (
@@ -87,12 +95,13 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
               ref={titleRef}
               aria-label="篇目标题"
               rows={1}
+              readOnly={suspended}
               placeholder="未命名笔记"
               value={title}
               className="article-title"
-              onChange={event => { onTitleChange?.(event.target.value); onTyping(); }}
+              onChange={(event) => { if (!suspended) { onTitleChange?.(event.target.value); onTyping(); } }}
               onKeyDown={event => {
-                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                if (suspended || event.nativeEvent.isComposing || event.keyCode === 229) return;
                 if (event.key === 'Enter' || (event.key === 'ArrowDown' && event.currentTarget.selectionStart === title.length)) {
                   event.preventDefault();
                   editorRef.current?.commands.focus('start');
@@ -103,14 +112,14 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
         )}
         <MarkdownEditor
           theme={theme}
-          onChange={(value) => { if (!disabled) onChange(value); }}
-          onTyping={() => { if (!disabled) onTyping(); }}
+          onChange={(value) => { if (!disabled && !suspended) onChange(value); }}
+          onTyping={() => { if (!disabled && !suspended) onTyping(); }}
           onEditorReady={handleEditorReady}
           notesRevision={notesRevision}
           isJournal={!article}
           isFocusMode={isFocusMode}
           knownTags={knownTags}
-          targetSearchText={disabled ? null : targetSearchText}
+          targetSearchText={disabled || suspended ? null : targetSearchText}
           onConsumedTargetSearchText={onConsumedTargetSearchText}
         />
         </div>

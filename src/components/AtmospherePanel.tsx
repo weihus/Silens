@@ -1,4 +1,6 @@
 import { useCallback, useId } from 'react';
+import { AISettingsSection } from './AISettingsSection';
+import type { AiEndpointConfig } from '../utils/reflectionAI';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import type { Theme, AtmosphereState } from '../types';
 import { VolumeX, Moon, CloudRain, Flame, Monitor, Download, X } from 'lucide-react';
@@ -22,12 +24,15 @@ interface AtmospherePanelProps {
   activeTheme: Theme;
   focusDuration: number;
   onFocusDurationChange: (d: number) => void;
+  aiOpenRequested?: number;
+  onAISaved?: (config: AiEndpointConfig) => void;
+  actionsDisabled?: boolean;
 }
 
 export function AtmospherePanel({
   open, ref, onToggle, themeConfig, activeTheme, atmosphere, onChange,
   focusDuration, onFocusDurationChange, onExport, onOpenStorage, onOpenBackups, onRestore,
-  onBackup, onMoveWorkspace, storageBusy, onCheckUpdates,
+  onBackup, onMoveWorkspace, storageBusy, onCheckUpdates, aiOpenRequested, onAISaved, actionsDisabled = false,
 }: AtmospherePanelProps) {
   const titleId = useId();
   const dialogRef = useDialogFocus(open, onToggle);
@@ -48,7 +53,7 @@ export function AtmospherePanel({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      className="atmosphere-panel fixed bottom-16 right-6 z-[100] p-6 rounded-xl border flex flex-col gap-6"
+      className="atmosphere-panel fixed bottom-16 right-6 z-[320] p-6 rounded-xl border flex flex-col gap-6"
       style={{ backgroundColor: activeTheme === 'night' ? '#171D1B' : activeTheme === 'paper' ? '#FAF8F5' : '#FFFFFF', color: themeConfig.text, borderColor: 'var(--theme-border)' }}
     >
       <div className="flex items-center justify-between">
@@ -96,7 +101,7 @@ export function AtmospherePanel({
           ))}
         </div>
       </div>
-      <button type="button" onClick={onExport} className="quiet-button flex items-center gap-2 py-2 px-2 rounded-md text-xs self-start"><Download size={14} aria-hidden="true" />导出</button>
+      <button type="button" disabled={actionsDisabled} onClick={onExport} className="quiet-button flex items-center gap-2 py-2 px-2 rounded-md text-xs self-start"><Download size={14} aria-hidden="true" />导出</button>
       <details className="border-t pt-4 text-xs" style={{ borderColor: 'var(--theme-border)', color: themeConfig.muted }}>
         <summary className="cursor-pointer py-1">本地文件</summary>
         <div className="flex flex-col gap-1 mt-3" aria-busy={storageBusy}>
@@ -107,14 +112,15 @@ export function AtmospherePanel({
             { label: '查看备份', action: onOpenBackups },
             { label: '迁移工作区', action: onMoveWorkspace },
           ].map(({ label, action }) => (
-            <button key={label} type="button" onClick={action} disabled={storageBusy || !action}
+            <button key={label} type="button" onClick={action} disabled={storageBusy || actionsDisabled || !action}
               className="quiet-button text-left rounded-md px-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed">{label}</button>
           ))}
           {storageBusy && <p role="status" className="px-2 py-1">正在处理…</p>}
           <p className="leading-relaxed mt-2">迁移后，原文件仍会保留。恢复备份会先为当前笔记再存一份副本。</p>
         </div>
       </details>
-      <button type="button" onClick={onCheckUpdates} disabled={storageBusy || !onCheckUpdates} className="quiet-button rounded-md px-2 py-2 text-left text-xs disabled:opacity-50">检查软件更新</button>
+      <AISettingsSection openRequested={aiOpenRequested} onSaved={onAISaved} disabled={storageBusy} />
+      <button type="button" onClick={onCheckUpdates} disabled={storageBusy || actionsDisabled || !onCheckUpdates} className="quiet-button rounded-md px-2 py-2 text-left text-xs disabled:opacity-50">检查软件更新</button>
     </div>
   );
 }

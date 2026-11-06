@@ -8,6 +8,7 @@ class ResizeObserverMock {
 }
 
 window.ResizeObserver = ResizeObserverMock as any;
+Element.prototype.scrollIntoView = vi.fn();
 
 // JSDOM defines a native DOM Plugin constructor that throws "Illegal constructor"
 // when called with `new`. ProseMirror's Plugin happens to share the same name.

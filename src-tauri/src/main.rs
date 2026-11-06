@@ -4,6 +4,15 @@
 mod backlinks;
 mod documents;
 mod note_times;
+mod text_features;
+mod reflection;
+mod reflection_ai;
+mod ai_endpoint;
+mod ai_credentials;
+#[cfg(test)]
+mod reflection_tests;
+
+const REFLECTION_INDEX_VERSION: i64 = 2;
 use note_times::NoteTimes;
 use backlinks::query_backlinks;
 
@@ -232,7 +241,7 @@ async fn get_all_documents(app: tauri::AppHandle) -> Result<Vec<Document>, Strin
             filename,
             kind,
             journal_date,
-            tags: documents::tags(documents::split(&content).1),
+            tags: text_features::extract(&content).tags,
             title,
             content,
             created: times.created,
@@ -437,6 +446,7 @@ pub struct TagGroup {
     pub tag: String,
     pub filename: String,
     pub blocks: Vec<String>,
+    pub is_untagged: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -448,21 +458,25 @@ pub struct RecallArticle {
     pub modified: i64,
     pub created_date: String,
     pub tags: Vec<String>,
+    pub is_untagged: bool,
 }
 
 #[tauri::command]
 async fn get_timeline_data(app: tauri::AppHandle) -> Result<Vec<DayRecord>, String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     query_timeline(&get_db_connection(&app)?)
 }
 
 fn query_timeline(conn: &rusqlite::Connection) -> Result<Vec<DayRecord>, String> {
     let mut stmt = conn.prepare(
         "SELECT d.created_date, d.stem, d.kind, d.title, d.created, d.modified,
-                b.content, t.name
+                b.content, CASE WHEN d.kind = 'article' THEN rt.tag ELSE t.name END, b.is_untagged
          FROM documents d JOIN blocks b ON b.date = d.stem
          LEFT JOIN block_tags bt ON bt.block_id = b.id
          LEFT JOIN tags t ON t.id = bt.tag_id
-         ORDER BY d.created_date DESC, d.created DESC, b.id ASC, t.name ASC"
+         LEFT JOIN reflection_block_tags rt ON rt.block_id = b.id AND d.kind = 'article'
+         ORDER BY d.created_date DESC, d.created DESC, b.id ASC, t.name ASC, rt.tag ASC"
     ).map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut records: Vec<DayRecord> = Vec::new();
@@ -472,6 +486,7 @@ fn query_timeline(conn: &rusqlite::Connection) -> Result<Vec<DayRecord>, String>
         let kind: String = row.get(2).map_err(|e| e.to_string())?;
         let content: String = row.get(6).map_err(|e| e.to_string())?;
         let tag: Option<String> = row.get(7).map_err(|e| e.to_string())?;
+        let is_untagged: bool = row.get(8).map_err(|e| e.to_string())?;
         if records.last().is_none_or(|day| day.date != date) {
             records.push(DayRecord { date: date.clone(), tags: vec![], articles: vec![] });
         }
@@ -482,7 +497,7 @@ fn query_timeline(conn: &rusqlite::Connection) -> Result<Vec<DayRecord>, String>
                     filename: filename.clone(), title: row.get(3).map_err(|e| e.to_string())?,
                     content, created: row.get(4).map_err(|e| e.to_string())?,
                     modified: row.get(5).map_err(|e| e.to_string())?,
-                    created_date: date, tags: vec![],
+                    created_date: date, tags: vec![], is_untagged,
                 });
             }
             let article = day.articles.iter_mut().find(|article| article.filename == filename).unwrap();
@@ -490,10 +505,10 @@ fn query_timeline(conn: &rusqlite::Connection) -> Result<Vec<DayRecord>, String>
                 if !article.tags.contains(&tag) { article.tags.push(tag); }
             }
         } else if let Some(tag) = tag {
-            if let Some(group) = day.tags.iter_mut().find(|group| group.tag == tag && group.filename == filename) {
+            if let Some(group) = day.tags.iter_mut().find(|group| group.tag == tag && group.filename == filename && group.is_untagged == is_untagged) {
                 group.blocks.push(content);
             } else {
-                day.tags.push(TagGroup { tag, filename, blocks: vec![content] });
+                day.tags.push(TagGroup { tag, filename, blocks: vec![content], is_untagged });
             }
         }
     }
@@ -505,6 +520,20 @@ fn get_db_connection(app: &tauri::AppHandle) -> Result<rusqlite::Connection, Str
 }
 
 fn open_workspace_index(app: &tauri::AppHandle, workspace: &Path) -> Result<rusqlite::Connection, String> {
+    let mut conn = open_workspace_index_schema(app, workspace)?;
+    ensure_index_ready(&mut conn, workspace)?;
+    Ok(conn)
+}
+
+fn ensure_index_ready(conn: &mut rusqlite::Connection, workspace: &Path) -> Result<(), String> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if version < REFLECTION_INDEX_VERSION {
+        rebuild_workspace_index(conn, workspace)?;
+    }
+    Ok(())
+}
+
+fn open_workspace_index_schema(app: &tauri::AppHandle, workspace: &Path) -> Result<rusqlite::Connection, String> {
     use std::hash::{Hash, Hasher};
     let workspace = fs::canonicalize(workspace).map_err(|e| e.to_string())?;
     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -519,7 +548,17 @@ fn open_workspace_index(app: &tauri::AppHandle, workspace: &Path) -> Result<rusq
 
 fn initialize_index(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| e.to_string())?;
+    conn.execute_batch("SAVEPOINT index_schema").map_err(|e| e.to_string())?;
+    match initialize_index_schema(conn) {
+        Ok(()) => conn.execute_batch("RELEASE index_schema").map_err(|e| e.to_string()),
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK TO index_schema; RELEASE index_schema");
+            Err(error)
+        }
+    }
+}
 
+fn initialize_index_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS blocks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -557,15 +596,75 @@ fn initialize_index(conn: &rusqlite::Connection) -> Result<(), String> {
         )", [],
     ).map_err(|e| e.to_string())?;
 
-    let columns: Vec<String> = conn.prepare("PRAGMA table_info(documents)").map_err(|e| e.to_string())?
-        .query_map([], |row| row.get(1)).map_err(|e| e.to_string())?
-        .collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-    for (name, definition) in [("created", "INTEGER NOT NULL DEFAULT 0"),
-        ("modified", "INTEGER NOT NULL DEFAULT 0"), ("created_date", "TEXT NOT NULL DEFAULT ''")] {
-        if !columns.iter().any(|column| column == name) {
-            conn.execute(&format!("ALTER TABLE documents ADD COLUMN {} {}", name, definition), [])
-                .map_err(|e| e.to_string())?;
+    let mut changed = false;
+    for (table, fields) in [
+        ("documents", vec![("created", "INTEGER NOT NULL DEFAULT 0"),
+            ("modified", "INTEGER NOT NULL DEFAULT 0"), ("created_date", "TEXT NOT NULL DEFAULT ''"),
+            ("modified_date", "TEXT NOT NULL DEFAULT ''"), ("normalized_h1", "TEXT")]),
+        ("blocks", vec![("clean_text", "TEXT NOT NULL DEFAULT ''"),
+            ("clean_char_count", "INTEGER NOT NULL DEFAULT 0 CHECK(clean_char_count >= 0)"),
+            ("is_untagged", "INTEGER NOT NULL DEFAULT 1 CHECK(is_untagged IN (0, 1))"),
+            ("hour_of_day", "INTEGER CHECK(hour_of_day BETWEEN 0 AND 23)"),
+            ("is_noise", "INTEGER NOT NULL DEFAULT 0 CHECK(is_noise IN (0, 1))"),
+            ("source_ordinal", "INTEGER NOT NULL DEFAULT 0 CHECK(source_ordinal >= 0)"),
+            ("anchor_text", "TEXT"), ("anchor_occurrence", "INTEGER CHECK(anchor_occurrence >= 0)")]),
+    ] {
+        let columns: Vec<String> = conn.prepare(&format!("PRAGMA table_info({})", table)).map_err(|e| e.to_string())?
+            .query_map([], |row| row.get(1)).map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        for (name, definition) in fields {
+            if !columns.iter().any(|column| column == name) {
+                conn.execute(&format!("ALTER TABLE {} ADD COLUMN {} {}", table, name, definition), [])
+                    .map_err(|e| e.to_string())?;
+                changed = true;
+            }
         }
+    }
+    for (name, kind) in [("note_work_mentions", "table"), ("note_work_mentions_by_work", "index"),
+        ("reflection_block_tags", "table"), ("reflection_wiki_links", "table"), ("article_title_works", "table"),
+        ("reflection_tags_by_name", "index"), ("reflection_links_by_target", "index"),
+        ("article_title_works_by_name", "index"), ("blocks_by_document", "index"),
+        ("documents_by_created_date", "index"), ("articles_by_modified_date", "index")] {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1 AND type = ?2)",
+            rusqlite::params![name, kind], |row| row.get(0)).map_err(|e| e.to_string())?;
+        changed |= !exists;
+    }
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS note_work_mentions (
+            block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+            work_name TEXT NOT NULL CHECK(length(work_name) > 0),
+            mention_count INTEGER NOT NULL CHECK(mention_count > 0),
+            co_occurrence_count INTEGER NOT NULL CHECK(co_occurrence_count > 0),
+            effective_chars REAL NOT NULL CHECK(effective_chars >= 0),
+            PRIMARY KEY (block_id, work_name)
+        );
+        CREATE INDEX IF NOT EXISTS note_work_mentions_by_work ON note_work_mentions(work_name, block_id);
+        CREATE TABLE IF NOT EXISTS reflection_block_tags (
+            block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (block_id, tag)
+        );
+        CREATE TABLE IF NOT EXISTS reflection_wiki_links (
+            block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+            occurrence_index INTEGER NOT NULL CHECK(occurrence_index >= 0),
+            target_filename TEXT NOT NULL,
+            raw_start INTEGER NOT NULL CHECK(raw_start >= 0),
+            raw_end INTEGER NOT NULL CHECK(raw_end > raw_start),
+            PRIMARY KEY (block_id, occurrence_index)
+        );
+        CREATE TABLE IF NOT EXISTS article_title_works (
+            document_stem TEXT NOT NULL REFERENCES documents(stem) ON DELETE CASCADE,
+            work_name TEXT NOT NULL,
+            PRIMARY KEY (document_stem, work_name)
+        );
+        CREATE INDEX IF NOT EXISTS reflection_tags_by_name ON reflection_block_tags(tag, block_id);
+        CREATE INDEX IF NOT EXISTS reflection_links_by_target ON reflection_wiki_links(target_filename, block_id);
+        CREATE INDEX IF NOT EXISTS article_title_works_by_name ON article_title_works(work_name, document_stem);
+        CREATE INDEX IF NOT EXISTS blocks_by_document ON blocks(date, source_ordinal);
+        CREATE INDEX IF NOT EXISTS documents_by_created_date ON documents(created_date, stem);
+        CREATE INDEX IF NOT EXISTS articles_by_modified_date ON documents(kind, modified_date, stem);")
+        .map_err(|e| e.to_string())?;
+    if changed {
+        conn.pragma_update(None, "user_version", 0).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -584,30 +683,53 @@ fn index_document(conn: &rusqlite::Connection, date: &str, content: &str, times:
 fn index_document_content(conn: &rusqlite::Connection, date: &str, content: &str, times: &NoteTimes) -> Result<(), String> {
     let filename = format!("{}.md", date);
     let kind = documents::kind(&filename);
-    conn.execute("INSERT OR REPLACE INTO documents (stem, kind, title, created, modified, created_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![date, kind, documents::title(&filename, content), times.created, times.modified, times.created_date]).map_err(|e| e.to_string())?;
+    let hour = text_features::hour_of_day(&filename, times.created);
+    let modified_date = chrono::DateTime::from_timestamp(times.modified, 0)
+        .ok_or("DOCUMENT_TIME_ERROR: invalid modified timestamp")?
+        .with_timezone(&Local).format("%Y-%m-%d").to_string();
+    let normalized_h1 = (kind == "article").then(|| text_features::normalized_h1(content)).flatten();
+    conn.execute("INSERT OR REPLACE INTO documents (stem, kind, title, created, modified, created_date, modified_date, normalized_h1) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![date, kind, documents::title(&filename, content), times.created, times.modified,
+            times.created_date, modified_date, normalized_h1]).map_err(|e| e.to_string())?;
+    if kind == "article" {
+        for name in text_features::title_works(content) {
+            conn.execute("INSERT INTO article_title_works (document_stem, work_name) VALUES (?1, ?2)",
+                rusqlite::params![date, name]).map_err(|e| e.to_string())?;
+        }
+    }
     conn.execute("DELETE FROM blocks WHERE date = ?1", rusqlite::params![date])
         .map_err(|e| e.to_string())?;
     if kind == "article" {
         let body = documents::split(content).1;
         let mut tags = documents::tags(body);
         if tags.is_empty() { tags.push("默认".into()); }
-        return insert_index_block(conn, date, body, content, &tags);
+        let anchors = text_features::block_anchors(content, &[content], true);
+        return insert_index_block(conn, date, body, content, &tags, hour, 0,
+            anchors.first().and_then(Option::as_ref));
     }
 
     let mut current_block = String::new();
     let mut blocks = Vec::new();
     let mut empty_line_count = 0;
+    let code_ranges = text_features::code_ranges(content);
+    let mut offset = 0;
+    let mut code_cursor = 0;
 
-    // 与 get_timeline_data 完全一致的切分算法
-    for line in content.lines() {
+    for source_line in content.split_inclusive('\n') {
+        let line = source_line.strip_suffix('\n').unwrap_or(source_line).trim_end_matches('\r');
+        while code_ranges.get(code_cursor).is_some_and(|range| range.end <= offset) {
+            code_cursor += 1;
+        }
+        let in_code = code_ranges.get(code_cursor).is_some_and(|range|
+            range.start < offset + source_line.len() && range.end > offset);
+        offset += source_line.len();
         let trimmed = line.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() && !in_code {
             empty_line_count += 1;
         } else {
             if empty_line_count >= 3 {
                 if !current_block.trim().is_empty() {
-                    blocks.push(current_block.trim().to_string());
+                    blocks.push(current_block.trim_end_matches(['\r', '\n']).to_string());
                     current_block.clear();
                 }
             } else if !current_block.is_empty() {
@@ -621,11 +743,13 @@ fn index_document_content(conn: &rusqlite::Connection, date: &str, content: &str
         }
     }
     if !current_block.trim().is_empty() {
-        blocks.push(current_block.trim().to_string());
+        blocks.push(current_block.trim_end_matches(['\r', '\n']).to_string());
     }
 
+    let block_refs: Vec<_> = blocks.iter().map(String::as_str).collect();
+    let anchors = text_features::block_anchors(content, &block_refs, false);
     // 提取标签并存入暗影索引
-    for block in blocks {
+    for (ordinal, block) in blocks.into_iter().enumerate() {
         let trimmed = block.trim();
         if trimmed.is_empty() {
             continue;
@@ -663,16 +787,35 @@ fn index_document_content(conn: &rusqlite::Connection, date: &str, content: &str
             cursor = abs_pos + 1;
         }
 
-        insert_index_block(conn, date, &clean_content, &block, &[found_tag])?;
+        insert_index_block(conn, date, &clean_content, &block, &[found_tag], hour, ordinal,
+            anchors.get(ordinal).and_then(Option::as_ref))?;
     }
 
     Ok(())
 }
 
-fn insert_index_block(conn: &rusqlite::Connection, date: &str, content: &str, raw: &str, tags: &[String]) -> Result<(), String> {
-    conn.execute("INSERT INTO blocks (date, content, raw_markdown) VALUES (?1, ?2, ?3)",
-        rusqlite::params![date, content, raw]).map_err(|e| e.to_string())?;
+fn insert_index_block(conn: &rusqlite::Connection, date: &str, content: &str, raw: &str, tags: &[String], hour: Option<u8>, ordinal: usize, anchor: Option<&text_features::NavigationAnchor>) -> Result<(), String> {
+    let features = text_features::extract(raw);
+    conn.execute("INSERT INTO blocks (date, content, raw_markdown, clean_text, clean_char_count, is_untagged, hour_of_day, is_noise, source_ordinal, anchor_text, anchor_occurrence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![date, content, raw, features.clean_text, features.clean_char_count as i64,
+            features.is_untagged, hour, features.is_noise, ordinal as i64,
+            anchor.map(|value| &value.text), anchor.map(|value| value.occurrence as i64)]).map_err(|e| e.to_string())?;
     let block_id = conn.last_insert_rowid();
+    for tag in &features.tags {
+        conn.execute("INSERT INTO reflection_block_tags (block_id, tag) VALUES (?1, ?2)",
+            rusqlite::params![block_id, tag]).map_err(|e| e.to_string())?;
+    }
+    for (occurrence, link) in features.wiki_links.iter().enumerate() {
+        conn.execute("INSERT INTO reflection_wiki_links (block_id, occurrence_index, target_filename, raw_start, raw_end) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![block_id, occurrence as i64, link.target_filename, link.start as i64,
+                link.end as i64]).map_err(|e| e.to_string())?;
+    }
+    let distinct_works = features.works_mentions.len();
+    for (name, count) in &features.works_mentions {
+        conn.execute("INSERT INTO note_work_mentions (block_id, work_name, mention_count, co_occurrence_count, effective_chars) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![block_id, name, *count as i64, distinct_works as i64,
+                features.clean_char_count as f64 / distinct_works as f64]).map_err(|e| e.to_string())?;
+    }
     for tag in tags {
         conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag]).map_err(|e| e.to_string())?;
         conn.execute("INSERT INTO block_tags (block_id, tag_id) SELECT ?1, id FROM tags WHERE name = ?2",
@@ -692,25 +835,36 @@ pub struct ShadowBlock {
     pub raw_markdown: String,
     pub created: i64,
     pub modified: i64,
+    pub is_untagged: bool,
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn query_blocks_by_tag(app: tauri::AppHandle, tag: String, start_date: Option<String>, end_date: Option<String>) -> Result<Vec<ShadowBlock>, String> {
-    query_tag_blocks(&get_db_connection(&app)?, &tag, start_date.as_deref(), end_date.as_deref())
+async fn query_blocks_by_tag(app: tauri::AppHandle, tag: String, start_date: Option<String>, end_date: Option<String>, untagged: Option<bool>) -> Result<Vec<ShadowBlock>, String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    query_tag_blocks_scope(&get_db_connection(&app)?, &tag, start_date.as_deref(), end_date.as_deref(), untagged)
 }
 
+#[cfg(test)]
 fn query_tag_blocks(conn: &rusqlite::Connection, tag: &str, start_date: Option<&str>, end_date: Option<&str>) -> Result<Vec<ShadowBlock>, String> {
+    query_tag_blocks_scope(conn, tag, start_date, end_date, None)
+}
+
+fn query_tag_blocks_scope(conn: &rusqlite::Connection, tag: &str, start_date: Option<&str>, end_date: Option<&str>, untagged: Option<bool>) -> Result<Vec<ShadowBlock>, String> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, d.created_date, b.content, b.raw_markdown, d.title, d.kind, d.stem, d.created, d.modified
+        "SELECT DISTINCT b.id, d.created_date, b.content, b.raw_markdown, d.title, d.kind, d.stem, d.created, d.modified, b.is_untagged
          FROM blocks b
          JOIN documents d ON d.stem = b.date
-         JOIN block_tags bt ON b.id = bt.block_id
-         JOIN tags t ON bt.tag_id = t.id
-         WHERE t.name = ?1 AND (?2 IS NULL OR d.created_date >= ?2) AND (?3 IS NULL OR d.created_date <= ?3)
+         LEFT JOIN block_tags bt ON b.id = bt.block_id
+         LEFT JOIN tags t ON bt.tag_id = t.id
+         WHERE ((?4 IS NULL AND t.name = ?1)
+             OR (?4 = 1 AND b.is_untagged = 1)
+             OR (?4 = 0 AND EXISTS (SELECT 1 FROM reflection_block_tags rbt WHERE rbt.block_id = b.id AND rbt.tag = ?1)))
+           AND (?2 IS NULL OR d.created_date >= ?2) AND (?3 IS NULL OR d.created_date <= ?3)
          ORDER BY d.created_date DESC, d.created DESC, b.id ASC"
     ).map_err(|e| e.to_string())?;
 
-    let blocks_iter = stmt.query_map(rusqlite::params![tag, start_date, end_date], |row| {
+    let blocks_iter = stmt.query_map(rusqlite::params![tag, start_date, end_date, untagged], |row| {
         Ok(ShadowBlock {
             id: row.get(0)?,
             date: row.get(1)?,
@@ -721,6 +875,7 @@ fn query_tag_blocks(conn: &rusqlite::Connection, tag: &str, start_date: Option<&
             kind: row.get(5)?,
             created: row.get(7)?,
             modified: row.get(8)?,
+            is_untagged: row.get(9)?,
         })
     }).map_err(|e| e.to_string())?;
     blocks_iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
@@ -780,8 +935,10 @@ async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<Search
         return Ok(vec![]);
     }
 
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let conn = get_db_connection(&app)?;
-    
+
     // SQLite LIKE 默认对 ASCII 忽略大小写
     let sql_query = format!("%{}%", query_trim);
     
@@ -945,7 +1102,7 @@ fn copy_files(source: &Path, target: &Path, markdown_only: bool, overwrite: bool
 }
 
 fn rebuild_index_for_workspace(app: &tauri::AppHandle, workspace: &Path) -> Result<usize, String> {
-    let mut conn = open_workspace_index(app, workspace)?;
+    let mut conn = open_workspace_index_schema(app, workspace)?;
     rebuild_workspace_index(&mut conn, workspace)
 }
 
@@ -964,6 +1121,7 @@ fn rebuild_workspace_index(conn: &mut rusqlite::Connection, workspace: &Path) ->
         let times = note_times::get(workspace, filename, &registry)?;
         index_document(&tx, documents::stem(filename), &content, &times)?;
     }
+    tx.pragma_update(None, "user_version", REFLECTION_INDEX_VERSION).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(files.len())
 }
@@ -1108,13 +1266,13 @@ async fn create_backup(app: tauri::AppHandle) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn test_times() -> NoteTimes {
+    pub(super) fn test_times() -> NoteTimes {
         NoteTimes { created: 100, modified: 200, created_date: "2026-11-02".into() }
     }
 
-    struct TempDir(PathBuf);
+    pub(super) struct TempDir(pub(super) PathBuf);
     impl TempDir {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path = std::env::temp_dir().join(format!("silens-test-{}", unique_suffix()));
             fs::create_dir(&path).unwrap();
             Self(path)
@@ -1384,6 +1542,52 @@ mod tests {
     }
 
     #[test]
+    fn untagged_scope_separates_literal_default_and_legacy_code_tags() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        index_document(&conn, "2026-11-02", "plain moment\n\n\n\n#默认 literal moment\n\n\n\n`#code` code-only moment\n\n\n\n#其他 second-tag #默认", &test_times()).unwrap();
+        index_document(&conn, "untagged-article", "# Title\n\nplain article", &test_times()).unwrap();
+        index_document(&conn, "tagged-article", "# Title\n\n#其他 #默认 tagged article", &test_times()).unwrap();
+        let days = query_timeline(&conn).unwrap();
+        let groups = &days[0].tags;
+        assert!(groups.iter().any(|g| g.tag == "默认" && g.is_untagged && g.blocks.iter().any(|block| block == "plain moment")));
+        assert!(groups.iter().any(|g| g.tag == "默认" && !g.is_untagged && g.blocks == vec!["literal moment"]));
+        assert!(days[0].articles.iter().find(|a| a.filename == "untagged-article.md").unwrap().is_untagged);
+        assert!(!days[0].articles.iter().find(|a| a.filename == "tagged-article.md").unwrap().is_untagged);
+        let untagged = query_tag_blocks_scope(&conn, "默认", Some("2026-11-02"), Some("2026-11-02"), Some(true)).unwrap();
+        assert_eq!(untagged.len(), 3);
+        assert!(untagged.iter().all(|b| b.is_untagged));
+        assert!(untagged.iter().any(|b| b.raw_markdown.contains("`#code`")));
+        let literal = query_tag_blocks_scope(&conn, "默认", None, None, Some(false)).unwrap();
+        assert_eq!(literal.len(), 3);
+        assert!(literal.iter().all(|b| !b.is_untagged));
+        assert!(literal.iter().any(|b| b.raw_markdown.contains("second-tag")));
+        assert!(query_tag_blocks_scope(&conn, "默认", Some("2026-11-03"), None, Some(true)).unwrap().is_empty());
+        assert!(query_tag_blocks_scope(&conn, "默认", None, Some("2026-11-01"), Some(false)).unwrap().is_empty());
+        assert_eq!(query_tag_blocks(&conn, "默认", None, None).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn article_timeline_uses_real_title_tags_without_fabricating_default() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_index(&conn).unwrap();
+        index_document(&conn, "header-tag", "# Title #读书\n\nplain body", &test_times()).unwrap();
+        index_document(&conn, "no-tags", "# Untagged\n\nplain body", &test_times()).unwrap();
+        index_document(&conn, "literal-default", "# Title\n\n#默认 body", &test_times()).unwrap();
+        let days = query_timeline(&conn).unwrap();
+        let articles = &days[0].articles;
+        let header = articles.iter().find(|article| article.filename == "header-tag.md").unwrap();
+        assert_eq!(header.tags, vec!["读书"]);
+        assert!(!header.is_untagged);
+        let untagged = articles.iter().find(|article| article.filename == "no-tags.md").unwrap();
+        assert!(untagged.tags.is_empty());
+        assert!(untagged.is_untagged);
+        let default = articles.iter().find(|article| article.filename == "literal-default.md").unwrap();
+        assert_eq!(default.tags, vec!["默认"]);
+        assert!(!default.is_untagged);
+    }
+
+    #[test]
     fn existing_index_schema_is_upgraded() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE documents (stem TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL);").unwrap();
@@ -1411,8 +1615,32 @@ mod tests {
     }
 }
 
+#[tauri::command]
+async fn get_period_reflection(
+    app: tauri::AppHandle,
+    query: reflection::ReflectionQuery,
+) -> Result<reflection::PeriodReflectionResult, String> {
+    query.validate()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = {
+            let state = app.state::<StorageLock>();
+            let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+            let workspace = get_active_workspace(&app)?;
+            let mut conn = open_workspace_index(&app, &workspace)?;
+            reflection::load_snapshot(&mut conn, &query)?
+        };
+        Ok(reflection::compute(snapshot, query))
+    }).await.map_err(|error| format!("REFLECTION_TASK_ERROR: {}", error))?
+}
+
+#[tauri::command]
+fn prepare_reflection_ai_payload(result: reflection::PeriodReflectionResult) -> Result<reflection_ai::ReflectionPayloadPreview, String> {
+    reflection_ai::prepare_payload(&result)
+}
+
 fn main() {
     tauri::Builder::default()
+        .manage(ai_endpoint::AiRuntime::default())
         .manage(StorageLock::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -1425,6 +1653,12 @@ fn main() {
             rename_tag,
             delete_tag,
             get_timeline_data,
+            get_period_reflection,
+            prepare_reflection_ai_payload,
+            ai_endpoint::get_ai_endpoint_config,
+            ai_endpoint::save_ai_endpoint_config,
+            ai_endpoint::generate_reflection_epilogue,
+            ai_endpoint::cancel_reflection_epilogue,
             query_blocks_by_tag,
             rebuild_shadow_index,
             create_backup,

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { X, FileText, File, Image } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { captureImage } from '../utils/imageExport';
 
 interface ExportDialogProps {
   open: boolean;
@@ -59,38 +60,23 @@ export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, 
         // PNG/JPG export using html-to-image
         const source = document.querySelector<HTMLElement>('[data-note-content]') ?? document.querySelector<HTMLElement>('[data-note-body], .tiptap');
         if (!source) throw new Error('Editor not found');
-        const element = source.cloneNode(true) as HTMLElement;
-        element.style.width = `${source.getBoundingClientRect().width}px`;
-        element.style.position = 'fixed';
-        element.style.left = '-10000px';
-        element.style.top = '0';
-        element.style.color = themeConfig.text;
-        element.style.paddingBlock = '24px';
-        const titleInput = element.querySelector('textarea');
-        if (titleInput) {
-          const heading = document.createElement('h1');
-          heading.className = 'article-title';
-          heading.textContent = title ?? '';
-          titleInput.replaceWith(heading);
-        }
-        element.querySelectorAll('.is-zen-mode').forEach(node => node.classList.remove('is-zen-mode'));
-        element.querySelectorAll('[role="listbox"]').forEach(node => node.remove());
-        document.body.appendChild(element);
-        let dataUrl: string;
-        try {
-          const { toPng, toJpeg } = await import('html-to-image');
-          const getDataUrl = format === 'png' ? toPng : toJpeg;
-          dataUrl = await getDataUrl(element, {
-            quality: 0.95,
-            pixelRatio: 2,
-            backgroundColor: themeConfig.bg,
-            style: { position: 'static', left: 'auto', top: 'auto' },
-          });
-        } finally {
-          element.remove();
-        }
-
-        const blob = await fetch(dataUrl).then(r => r.blob());
+        const bytes = await captureImage(source, {
+          format,
+          backgroundColor: themeConfig.bg,
+          color: themeConfig.text,
+          prepareClone: element => {
+            element.style.paddingBlock = '24px';
+            const titleInput = element.querySelector('textarea');
+            if (titleInput) {
+              const heading = document.createElement('h1');
+              heading.className = 'article-title';
+              heading.textContent = title ?? '';
+              titleInput.replaceWith(heading);
+            }
+            element.querySelectorAll('.is-zen-mode').forEach(node => node.classList.remove('is-zen-mode'));
+            element.querySelectorAll('[role="listbox"]').forEach(node => node.remove());
+          },
+        });
         const ext = format === 'png' ? '.png' : '.jpg';
 
         // Use Tauri dialog to save
@@ -104,7 +90,7 @@ export function ExportDialog({ open, onClose, onBusyChange, theme, themeConfig, 
         });
 
         if (!path) return;
-        await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+        await writeFile(path, bytes);
       }
 
       exported = true;

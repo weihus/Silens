@@ -18,13 +18,16 @@ export function useDialogFocus(
   open: boolean,
   onClose: () => void,
   initialFocusRef?: RefObject<HTMLElement | null>,
+  options?: { restoreFocus?: boolean },
 ): RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   const initialRef = useRef(initialFocusRef);
+  const restoreFocus = useRef(options?.restoreFocus !== false);
   useLayoutEffect(() => {
     closeRef.current = onClose;
     initialRef.current = initialFocusRef;
+    restoreFocus.current = options?.restoreFocus !== false;
   });
 
   useLayoutEffect(() => {
@@ -69,7 +72,7 @@ export function useDialogFocus(
       window.clearTimeout(timer);
       document.removeEventListener('keydown', handleKeyDown, true);
       if (originalTabIndex === null) dialog.removeAttribute('tabindex');
-      if (previous?.isConnected && !otherDialogFocused()) previous.focus({ preventScroll: true });
+      if (restoreFocus.current && previous?.isConnected && !otherDialogFocused()) previous.focus({ preventScroll: true });
     };
   }, [open]);
 

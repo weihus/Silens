@@ -24,6 +24,7 @@ interface CommandPaletteProps {
   onTagManaged?: () => void;
   onSelectResult?: (date: string, searchText: string) => boolean | void | Promise<boolean | void>;
   onNewArticle?: () => void;
+  onOpenReflection?: () => void | Promise<void>;
   onToday?: () => void;
   onQuickJump?: (preset?: 'yesterday' | 'this-week' | 'this-month' | 'this-year', customRange?: { start?: string; end?: string }) => void;
   onLoadDocument?: (content: string, filename: string, targetSearchText?: string) => void;
@@ -54,6 +55,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectResult,
   onQuickJump,
   onNewArticle,
+  onOpenReflection,
   onToday,
 }) => {
   const reducedMotion = useReducedMotion();
@@ -89,8 +91,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const dialogRef = useDialogFocus(open, () => onOpenChange(false), inputRef);
 
   // 零状态：时光穿梭快捷选项（查询为空时渲染，键盘可导航，回车触发）
-  const QUICK_JUMP_ACTIONS = [
+  const QUICK_JUMP_ACTIONS: { id: string; label: string; action: () => void | Promise<void> }[] = [
     ...(onNewArticle ? [{ id: 'new-article', label: '新建篇目', action: onNewArticle }] : []),
+    ...(onOpenReflection ? [{ id: 'reflection', label: '时光拾遗（周期回顾）', action: onOpenReflection }] : []),
     ...(onToday ? [{ id: 'today', label: '回到今天', action: onToday }] : []),
     { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
     { id: 'this-week', label: '查看本周', action: () => onQuickJump?.('this-week') },
@@ -109,6 +112,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       },
     },
   ];
+  const runQuickAction = (item: typeof QUICK_JUMP_ACTIONS[number]) => {
+    const action = item.action();
+    if (action instanceof Promise) void action.catch(() => setNavigationFailed(true));
+    if (!['custom-range', 'new-article', 'today', 'reflection'].includes(item.id)) {
+      setQuery('');
+      onOpenChange(false);
+    }
+  };
 
   // 打开时重置自定义区间子状态
   useEffect(() => {
@@ -169,11 +180,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           } else if (e.key === 'Enter') {
             e.preventDefault();
             const selected = QUICK_JUMP_ACTIONS[selectedIndex];
-            if (selected) selected.action();
-            if (selected && !['custom-range', 'new-article', 'today'].includes(selected.id)) {
-              setQuery('');
-              onOpenChange(false);
-            }
+            if (selected) runQuickAction(selected);
           }
           return;
         }
@@ -195,18 +202,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         }
       }
     },
-    [query, results, selectedIndex, onOpenChange, selectResult, onQuickJump, onNewArticle, onToday, customMode]
+    [query, results, selectedIndex, onOpenChange, selectResult, onQuickJump, onNewArticle, onOpenReflection, onToday, customMode]
   );
 
   // 4. 列表滚动跟随 (Scroll into view)
   useEffect(() => {
-    if (listRef.current && results.length > 0) {
+    if (listRef.current && (results.length > 0 || !query.trim())) {
       const activeEl = listRef.current.children[selectedIndex] as HTMLElement;
       if (activeEl) {
         activeEl.scrollIntoView({ block: 'nearest' });
       }
     }
-  }, [selectedIndex, results]);
+  }, [selectedIndex, results, query]);
 
   const selectedResult = results[selectedIndex] ?? null;
 
@@ -317,15 +324,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 ) : (
                   <div className="p-2">
                     <div className="px-3 pt-2 pb-1 text-[11px] opacity-45">按时间回顾</div>
-                    <div ref={listRef} className="flex flex-col">
+                    <div ref={listRef} className="flex max-h-[55vh] flex-col overflow-y-auto">
                       {QUICK_JUMP_ACTIONS.map((item, idx) => (
                         <button
                           type="button"
                           key={item.id}
-                          onClick={() => {
-                            item.action();
-                            if (!['custom-range', 'new-article', 'today'].includes(item.id)) onOpenChange(false);
-                          }}
+                          onClick={() => runQuickAction(item)}
                           onMouseEnter={() => setSelectedIndex(idx)}
                           className="w-full px-3 py-2.5 rounded-md text-left text-[13px] text-inherit transition-colors duration-150"
                           style={{ backgroundColor: idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}

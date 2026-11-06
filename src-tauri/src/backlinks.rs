@@ -10,75 +10,26 @@ pub struct Backlink {
     occurrence: usize,
 }
 
-fn first_reference(line: &str, filename: &str) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut pos = 0;
-    while pos < bytes.len() {
-        if bytes[pos] == b'\\' {
-            pos += 2;
-        } else if bytes[pos..].starts_with(b"[[") {
-            let start = pos;
-            pos += 2;
-            let end = line[pos..].find(']').map(|offset| pos + offset)?;
-            let target = line[pos..end].split('|').next().unwrap_or("").trim();
-            if !target.is_empty() && !target.contains('[') && bytes[end..].starts_with(b"]]") {
-                let normalized = if target.ends_with(".md") { target.to_string() } else { format!("{}.md", target) };
-                if normalized == filename { return Some((start, end + 2)); }
-            }
-            pos = end + 1;
-        } else {
-            pos += 1;
-        }
-    }
-    None
-}
-
 fn reference(content: &str, filename: &str) -> Option<(String, String, usize)> {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-    let mut code_block = false;
-    let mut text_start = None;
-    let mut text_end = 0;
-    let mut candidates = Vec::new();
-    for (event, range) in Parser::new(content).into_offset_iter() {
-        if matches!(event, Event::Text(_)) && !code_block {
-            let start = if range.start > 0 && content.as_bytes()[range.start - 1] == b'\\' {
-                range.start - 1
-            } else { range.start };
-            if text_start.is_some() && start > text_end {
-                candidates.push((text_start.take().unwrap(), text_end));
-            }
-            text_start.get_or_insert(start);
-            text_end = range.end;
-        } else {
-            if let Some(start) = text_start.take() { candidates.push((start, text_end)); }
-            if matches!(event, Event::Start(Tag::CodeBlock(_))) { code_block = true; }
-            if matches!(event, Event::End(TagEnd::CodeBlock)) { code_block = false; }
-        }
-    }
-    if let Some(start) = text_start { candidates.push((start, text_end)); }
-    for (offset, limit) in candidates {
-        if let Some((start, end)) = first_reference(&content[offset..limit], filename) {
-            let start = offset + start;
-            let end = offset + end;
-            let line_start = content[..start].rfind('\n').map_or(0, |n| n + 1);
-            let line_end = content[end..].find('\n').map_or(content.len(), |n| end + n);
-            let line = &content[line_start..line_end];
-            let chars: Vec<char> = line.chars().collect();
-            let link_start = content[line_start..start].chars().count();
-            let link_end = content[line_start..end].chars().count();
-            let from = link_start.saturating_sub(60);
-            let to = (link_end + 80).min(chars.len()).min(from + 180);
-            let mut snippet = String::new();
-            if from > 0 { snippet.push('…'); }
-            snippet.extend(chars[from..to].iter());
-            if to < chars.len() { snippet.push('…'); }
-            let search_text = content[start..end].to_string();
-            // Count earlier literal occurrences so navigation skips examples in code.
-            let occurrence = content[..start].matches(search_text.as_str()).count();
-            return Some((snippet.trim().to_string(), search_text, occurrence));
-        }
-    }
-    None
+    let link = super::text_features::wiki_links(content).into_iter()
+        .find(|link| link.target_filename == filename)?;
+    let (start, end) = (link.start, link.end);
+    let line_start = content[..start].rfind('\n').map_or(0, |n| n + 1);
+    let line_end = content[end..].find('\n').map_or(content.len(), |n| end + n);
+    let line = &content[line_start..line_end];
+    let chars: Vec<char> = line.chars().collect();
+    let link_start = content[line_start..start].chars().count();
+    let link_end = content[line_start..end].chars().count();
+    let from = link_start.saturating_sub(60);
+    let to = (link_end + 80).min(chars.len()).min(from + 180);
+    let mut snippet = String::new();
+    if from > 0 { snippet.push('…'); }
+    snippet.extend(chars[from..to].iter());
+    if to < chars.len() { snippet.push('…'); }
+    let search_text = content[start..end].to_string();
+    // Preserve the existing backlink DTO and raw-prefix occurrence semantics.
+    let occurrence = content[..start].matches(search_text.as_str()).count();
+    Some((snippet.trim().to_string(), search_text, occurrence))
 }
 
 fn find_backlinks(workspace: &Path, filename: &str) -> Result<Vec<Backlink>, String> {
@@ -155,6 +106,19 @@ mod tests {
         assert!(reference("- item\n\n    real [[note]]", "note.md").is_some());
         assert_eq!(reference("`[[note]]` then [[note]]", "note.md").unwrap().2, 1);
         assert_eq!(reference("\\[[note]] then [[note]]", "note.md").unwrap().2, 1);
+    }
+
+    #[test]
+    fn shared_scanner_preserves_raw_alias_locator_and_prefix_count() {
+        let raw = "`[[目标.md|**别名**]]`\n\n前 [[目标.md|**别名**]] 后 [[目标]]";
+        let (snippet, search_text, occurrence) = reference(raw, "目标.md").unwrap();
+        assert_eq!(snippet, "前 [[目标.md|**别名**]] 后 [[目标]]");
+        assert_eq!(search_text, "[[目标.md|**别名**]]");
+        assert_eq!(occurrence, 1);
+        assert_eq!(super::super::text_features::wiki_links(raw).len(), 2);
+        for raw in ["[[目标\n续行]]", "[[[目标]]]", "[[目标]]]", "[[|目标]]"] {
+            assert!(reference(raw, "目标.md").is_none());
+        }
     }
 
     #[test]

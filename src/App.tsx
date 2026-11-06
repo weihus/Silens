@@ -9,9 +9,10 @@ import { CommandPalette } from './components/CommandPalette';
 import { AtmospherePanel } from './components/AtmospherePanel';
 import { UpdateManager } from './components/UpdateManager';
 import { ExportDialog } from './components/ExportDialog';
+import { PeriodReflectionScroll } from './components/PeriodReflectionScroll';
 import { RestoreDialog } from './components/RestoreDialog';
 import { Editor } from '@tiptap/react';
-import type { AtmosphereState, NoteTarget, Theme } from './types';
+import type { AtmosphereState, NoteTarget, ReflectionPerspective, Theme } from './types';
 import { computeTagFrequency, loadTagsByDoc, updateDocTags } from './utils/tags';
 import { useDocumentSession } from './hooks/useDocumentSession';
 import { TimelineSidebar } from './components/TimelineSidebar';
@@ -117,36 +118,63 @@ export default function App() {
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
-  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen });
-  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen };
+  const [reflectionPhase, setReflectionPhase] = useState<'closed' | 'preparing' | 'open'>('closed');
+  const [reflectionPerspective, setReflectionPerspective] = useState<ReflectionPerspective>({ kind: 'all' });
+  const [reflectionPreparationError, setReflectionPreparationError] = useState<string | null>(null);
+  const [reflectionExportBusy, setReflectionExportBusy] = useState(false);
+  const [aiSettingsRequested, setAISettingsRequested] = useState(0);
+  const [aiSettingsRevision, setAISettingsRevision] = useState(0);
+  const [aiSettingsFromReflection, setAISettingsFromReflection] = useState(false);
+  const aiSettingsRoute = useRef(false);
+  const reflectionRequest = useRef(0);
+  const reflectionState = useRef({ active: false, pinned: false, focused: false, navigating: false, exporting: false });
+  reflectionState.current.active = reflectionPhase !== 'closed';
+  reflectionState.current.pinned = sidebarPinned;
+  reflectionState.current.focused = isFocusMode;
+  const lastWritingFocus = useRef<HTMLElement | null>(null);
+  const writingBookmark = useRef<{
+    filename: string | null;
+    doc: Editor['state']['doc'] | null;
+    selection: Editor['state']['selection'] | null;
+    scrollTop: number;
+    focus: HTMLElement | null;
+    invoker: HTMLElement | null;
+    titleSelection: { start: number; end: number; direction: 'forward' | 'backward' | 'none' } | null;
+  } | null>(null);
+  const overlays = useRef({ paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen, reflectionActive: false });
+  overlays.current = { paletteOpen, panelOpen, sidebarOpen, exportOpen, exportBusy, updateOpen, restoreOpen, reflectionActive: reflectionPhase !== 'closed' };
   const setPaletteOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen || state.reflectionActive) return;
     const next = typeof value === 'function' ? value(state.paletteOpen) : value;
     setPaletteOpenState(next);
     if (next) setPanelOpenState(false);
   }, [setPanelOpenState]);
   const setPanelOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen || (state.reflectionActive && !aiSettingsRoute.current)) return;
     const next = typeof value === 'function' ? value(state.panelOpen) : value;
+    if (state.reflectionActive && next) return;
     setPanelOpenState(next);
+    if (!next) { aiSettingsRoute.current = false; setAISettingsFromReflection(false); }
     if (next) setPaletteOpenState(false);
   }, [setPanelOpenState]);
   const setSidebarOpen = useCallback((value: React.SetStateAction<boolean>) => {
     const state = overlays.current;
-    if (state.exportOpen || state.updateOpen || state.restoreOpen) return;
+    if (state.exportOpen || state.updateOpen || state.restoreOpen || (state.reflectionActive && !reflectionState.current.pinned)) return;
     const next = typeof value === 'function' ? value(state.sidebarOpen) : value;
     setSidebarOpenState(next);
     if (next) { setPaletteOpenState(false); setPanelOpenState(false); }
   }, [setPanelOpenState]);
   const setExportOpen = useCallback((open: boolean) => {
-    if (overlays.current.exportBusy || overlays.current.updateOpen) return;
+    if (overlays.current.exportBusy || overlays.current.updateOpen || overlays.current.reflectionActive) return;
     setExportOpenState(open);
     if (open) { setPaletteOpenState(false); setPanelOpenState(false); }
   }, [setPanelOpenState]);
-  const dialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen || restoreOpen;
-  const visibleSidebar = sidebarOpen && !dialogOpen;
+  const reflectionActive = reflectionPhase !== 'closed';
+  const otherDialogOpen = paletteOpen || panelOpen || exportOpen || updateOpen || restoreOpen;
+  const dialogOpen = otherDialogOpen || reflectionActive;
+  const visibleSidebar = sidebarOpen && !otherDialogOpen && (!reflectionActive || sidebarPinned);
   const [recallPeriod, setRecallPeriod] = useState<RecallPeriod | null>(() => ({ unit: 'month', anchor: todayKey() }));
   const [recallRange, setRecallRange] = useState<RecallRange | null>(() => periodRange({ unit: 'month', anchor: todayKey() }));
   const [timeViewRequest, setTimeViewRequest] = useState(0);
@@ -169,6 +197,111 @@ export default function App() {
   const { text, title, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
     change: changeText, changeTitle, getContent, open: openDocument, flush } = useDocumentSession(editor, onSaved);
 
+  const closeReflection = useCallback((reason: 'dismiss' | 'navigate' | 'write' = 'dismiss', force = false) => {
+    if (!reflectionState.current.active || (reflectionState.current.exporting && !force)) return;
+    reflectionRequest.current += 1;
+    reflectionState.current.active = false;
+    overlays.current.reflectionActive = false;
+    setReflectionPhase('closed');
+    setReflectionPreparationError(null);
+    if (aiSettingsRoute.current) {
+      aiSettingsRoute.current = false;
+      setAISettingsFromReflection(false);
+      setPanelOpenState(false);
+    }
+    const saved = writingBookmark.current;
+    if (reason === 'navigate' || !saved) return;
+    requestAnimationFrame(() => {
+      if (reflectionState.current.active || saved.filename !== currentFilename) return;
+      if (editor && saved.doc && saved.selection && editor.state.doc.eq(saved.doc) && !editor.state.selection.eq(saved.selection)) {
+        editor.view.dispatch(editor.state.tr.setSelection(saved.selection).setMeta('addToHistory', false));
+      }
+      const invoker = saved.invoker;
+      if (reason === 'write') {
+        editor?.view.focus();
+      } else if (invoker?.isConnected && invoker.closest('[role="complementary"]') && !invoker.closest('[inert]')) {
+        invoker.focus({ preventScroll: true });
+      } else if (saved.focus?.isConnected) {
+        if (editor && saved.focus === editor.view.dom) editor.view.focus();
+        else saved.focus.focus({ preventScroll: true });
+        if (saved.focus instanceof HTMLTextAreaElement && saved.titleSelection) {
+          saved.focus.setSelectionRange(saved.titleSelection.start, saved.titleSelection.end, saved.titleSelection.direction);
+        }
+      } else editor?.view.focus();
+      const scroller = document.getElementById('silens-scroll-container');
+      if (scroller) scroller.scrollTop = saved.scrollTop;
+    });
+  }, [editor, currentFilename, setPanelOpenState]);
+
+  const openReflectionAISettings = useCallback(() => {
+    if (!reflectionState.current.active || reflectionState.current.exporting) return;
+    aiSettingsRoute.current = true;
+    setAISettingsFromReflection(true);
+    setAISettingsRequested(value => value + 1);
+    setPaletteOpenState(false);
+    setPanelOpenState(true);
+  }, [setPanelOpenState]);
+  useEffect(() => {
+    if (!panelOpen) {
+      setAISettingsRequested(0);
+      if (aiSettingsRoute.current) {
+        aiSettingsRoute.current = false;
+        setAISettingsFromReflection(false);
+      }
+    }
+  }, [panelOpen]);
+
+  const openReflection = useCallback(async (perspective: ReflectionPerspective = { kind: 'all' }) => {
+    if (isFocusMode || loading || storageBusy || updateBusy || !currentFilename || reflectionState.current.exporting || reflectionState.current.navigating
+      || overlays.current.exportOpen || overlays.current.updateOpen || overlays.current.restoreOpen) return;
+    if (reflectionState.current.active && !reflectionPreparationError) return;
+    if (!reflectionState.current.active) {
+      const focus = lastWritingFocus.current ?? editor?.view.dom ?? null;
+      writingBookmark.current = {
+        filename: currentFilename, doc: editor?.state?.doc ?? null, selection: editor?.state?.selection ?? null,
+        scrollTop: document.getElementById('silens-scroll-container')?.scrollTop ?? 0,
+        focus, invoker: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+        titleSelection: focus instanceof HTMLTextAreaElement
+          ? { start: focus.selectionStart, end: focus.selectionEnd, direction: focus.selectionDirection } : null,
+      };
+    }
+    const request = ++reflectionRequest.current;
+    reflectionState.current.active = true;
+    overlays.current.reflectionActive = true;
+    setReflectionPerspective(perspective);
+    setReflectionPreparationError(null);
+    setReflectionPhase('preparing');
+    setPaletteOpenState(false);
+    setPanelOpenState(false);
+    try {
+      await flush();
+      if (request !== reflectionRequest.current || reflectionState.current.focused) return;
+      setReflectionPhase('open');
+    } catch {
+      if (request !== reflectionRequest.current) return;
+      setReflectionPhase('open');
+      setReflectionPreparationError('当前文字还未保存，先收好这份草稿，再展开这段时光。');
+    }
+  }, [isFocusMode, loading, storageBusy, updateBusy, currentFilename, editor, reflectionPreparationError, flush, setPanelOpenState]);
+
+  const changeReflectionContext = useCallback((perspective: ReflectionPerspective) => {
+    if (reflectionState.current.active && reflectionState.current.pinned && !reflectionState.current.exporting) {
+      setReflectionPerspective(perspective);
+    }
+  }, []);
+  const changeReflectionExportBusy = useCallback((busy: boolean) => {
+    reflectionState.current.exporting = busy;
+    setReflectionExportBusy(busy);
+  }, []);
+  const toggleFocusWithReflection = useCallback(() => {
+    closeReflection('dismiss', true);
+    toggleFocusMode();
+  }, [closeReflection, toggleFocusMode]);
+  useEffect(() => {
+    if (isFocusMode) closeReflection('dismiss', true);
+  }, [isFocusMode, closeReflection]);
+  useEffect(() => () => { reflectionRequest.current += 1; }, []);
+
   useAudio(atmosphere.sound, atmosphere.volume);
   useThemeCSS(activeTheme as Theme);
 
@@ -176,15 +309,15 @@ export default function App() {
     if (editor) void openDocument(todayKey() + '.md', true);
   }, [editor, openDocument]);
 
-  const closeState = useRef({ loading: true, storageBusy: false, updateBusy: false });
-  closeState.current = { loading, storageBusy, updateBusy };
+  const closeState = useRef({ loading: true, storageBusy: false, updateBusy: false, reflectionExportBusy: false });
+  closeState.current = { loading, storageBusy, updateBusy, reflectionExportBusy };
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async event => {
       event.preventDefault();
-      if (closing.current || closeState.current.loading || closeState.current.storageBusy || closeState.current.updateBusy) return;
+      if (closing.current || closeState.current.loading || closeState.current.storageBusy || closeState.current.updateBusy || closeState.current.reflectionExportBusy || reflectionState.current.exporting) return;
       closing.current = true;
       setStorageBusy(true);
       try {
@@ -213,7 +346,7 @@ export default function App() {
   }, []);
 
   const runStorageAction = useCallback(async (action: () => Promise<unknown>) => {
-    if (storageBusy || loading) return;
+    if (storageBusy || loading || reflectionState.current.active) return;
     setStorageBusy(true);
     setStorageError(null);
     try {
@@ -258,8 +391,8 @@ export default function App() {
     paletteOpen, setPaletteOpen,
     sidebarOpen, setSidebarOpen, sidebarPinned, setSidebarPinned,
     panelOpen, setPanelOpen,
-    toggleFocusMode,
-    exportOpen || storageBusy || updateOpen,
+    toggleFocusWithReflection,
+    exportOpen || storageBusy || updateOpen || restoreOpen,
   );
 
   // Tag click event listener
@@ -290,7 +423,7 @@ export default function App() {
   const handleExportContent = getContent;
 
   const createArticle = useCallback(async () => {
-    if (storageBusy || loading) return;
+    if (storageBusy || loading || reflectionState.current.active) return;
     if (!await openDocument(`article-${crypto.randomUUID()}.md`, true)) return;
     setTargetSearchText(null);
     setPaletteOpen(false);
@@ -299,13 +432,28 @@ export default function App() {
 
   // === Document navigation helper ===
   // 成功切换返回目标日期字符串；失败（文件不存在）返回 null
-  const switchToDocument = useCallback(async (date: string, searchText?: NoteTarget): Promise<{ date: string | null }> => {
-    if (storageBusy) return { date: null };
+  const switchToDocument = useCallback(async (date: string, searchText?: NoteTarget, fromReflection = false): Promise<{ date: string | null }> => {
+    if (storageBusy || (reflectionState.current.active && !fromReflection)) return { date: null };
     const filename = date.endsWith('.md') ? date : `${date}.md`;
-    const opened = await openDocument(filename, filename === `${todayKey()}.md`);
-    if (opened) setTargetSearchText(searchText ?? null);
-    return { date: opened ? date : null };
+    const request = reflectionRequest.current;
+    const isCurrent = fromReflection ? () => reflectionState.current.active && request === reflectionRequest.current : undefined;
+    const opened = await openDocument(filename, filename === `${todayKey()}.md`, undefined, isCurrent);
+    if (!opened || (isCurrent && !isCurrent())) return { date: null };
+    setTargetSearchText(searchText ?? null);
+    return { date };
   }, [openDocument, storageBusy]);
+
+  const navigateReflection = useCallback(async (filename: string, target?: NoteTarget) => {
+    if (!reflectionState.current.active || reflectionState.current.navigating || reflectionState.current.exporting) return false;
+    const request = reflectionRequest.current;
+    reflectionState.current.navigating = true;
+    try {
+      const opened = await switchToDocument(filename, target, true);
+      return request === reflectionRequest.current && !!opened.date;
+    } finally {
+      reflectionState.current.navigating = false;
+    }
+  }, [switchToDocument]);
 
   useEffect(() => {
     const handleLink = (event: Event) => {
@@ -317,23 +465,26 @@ export default function App() {
     return () => window.removeEventListener('silens-link-click', handleLink);
   }, [switchToDocument, storageBusy]);
 
-  const changeRecallPeriod = useCallback((period: RecallPeriod) => {
+  const updateRecallRange = useCallback((range: RecallRange | null, period: RecallPeriod | null = null, label?: string) => {
+    if (reflectionState.current.exporting) return;
     rangeRequest.current += 1;
     setRecallPeriod(period);
-    setRecallRange(periodRange(period));
-    setRangeLabel(periodLabel(period));
+    setRecallRange(range);
+    setRangeLabel(range ? label ?? (range.start && range.end ? `${range.start} – ${range.end}`
+      : range.start ? `${range.start} 起` : `截至 ${range.end}`) : null);
     setRangeLoading(false);
     setRangeError(null);
   }, []);
+  const changeRecallPeriod = useCallback((period: RecallPeriod) => {
+    updateRecallRange(periodRange(period), period, periodLabel(period));
+  }, [updateRecallRange]);
 
   const jumpToCustomRange = useCallback(async (start?: string, end?: string, label?: string, period?: RecallPeriod) => {
-    if (!start && !end) return;
-    const request = ++rangeRequest.current;
+    if ((!start && !end) || reflectionState.current.exporting) return;
     const range = { start: start ?? '0001-01-01', end: end ?? todayKey() };
     if (range.start > range.end) [range.start, range.end] = [range.end, range.start];
-    setRecallPeriod(period ?? null);
-    setRecallRange(range);
-    setRangeLabel(label ?? (start && end ? `${range.start} – ${range.end}` : start ? `${start} 至今` : `截至 ${end}`));
+    updateRecallRange(range, period ?? null, label ?? (start && end ? `${range.start} – ${range.end}` : start ? `${start} 至今` : `截至 ${end}`));
+    const request = rangeRequest.current;
     setRangeLoading(true);
     setRangeError(null);
     setSidebarOpen(true);
@@ -349,7 +500,7 @@ export default function App() {
     } finally {
       if (request === rangeRequest.current) setRangeLoading(false);
     }
-  }, [setSidebarOpen, setToast]);
+  }, [setSidebarOpen, setToast, updateRecallRange]);
 
   const jumpToTimeRange = useCallback(async (preset: 'yesterday' | 'this-week' | 'this-month' | 'this-year') => {
     if (preset === 'yesterday') {
@@ -385,6 +536,10 @@ export default function App() {
       )}
 
 
+      <div data-writing-surface inert={reflectionActive} aria-hidden={reflectionActive || undefined}
+        onFocusCapture={event => {
+          if (event.target instanceof HTMLElement && event.target.closest('[data-note-content]')) lastWritingFocus.current = event.target;
+        }}>
       {/* Settings button */}
       <button
         ref={panelBtnRef}
@@ -392,6 +547,7 @@ export default function App() {
         className="chrome-control chrome-fade fixed bottom-6 right-6 z-30"
         data-visible={isIdle || panelOpen}
         style={{
+          visibility: reflectionActive ? 'hidden' : undefined,
           pointerEvents: isIdle || panelOpen ? 'auto' : 'none',
           color: themeConfig.muted,
           background: 'none', border: 'none', cursor: 'pointer', padding: '10px',
@@ -403,7 +559,7 @@ export default function App() {
       </button>
 
       {/* Bottom vignette */}
-      <div className="fixed bottom-0 left-0 right-0 h-32 pointer-events-none z-[25]">
+      <div className="fixed bottom-0 left-0 right-0 h-32 pointer-events-none z-[25]" style={{ visibility: reflectionActive ? 'hidden' : undefined }}>
         {(['paper', 'white', 'night'] as Theme[]).map((t) => (
           <div
             key={t}
@@ -419,6 +575,7 @@ export default function App() {
       {/* Word count */}
       <div
         className={`chrome-footer fixed bottom-6 left-0 right-0 z-30 pointer-events-none flex justify-center ${visibleSidebar ? 'chrome-footer-shifted' : ''}`}
+        style={{ visibility: reflectionActive ? 'hidden' : undefined }}
       >
         <div
           className="chrome-fade select-none flex items-center text-[11px] tracking-[0.06em]"
@@ -490,9 +647,10 @@ export default function App() {
           isSidebarOpen={visibleSidebar}
           onTyping={handleTyping}
           onMouseMove={() => {}}
-          onChange={changeText}
+          onChange={value => { if (!reflectionState.current.active) changeText(value); }}
           title={title}
-          onTitleChange={changeTitle}
+          onTitleChange={value => { if (!reflectionState.current.active) changeTitle(value); }}
+          suspended={reflectionActive}
           disabled={loading || storageBusy || updateBusy || !currentFilename}
           onEditorReady={setEditor}
           isFocusMode={isFocusMode}
@@ -504,6 +662,29 @@ export default function App() {
           onNavigate={(filename, searchText) => { void switchToDocument(filename, searchText); }}
         />
       </div>
+      </div>
+
+      <PeriodReflectionScroll
+        open={reflectionActive}
+        preparing={reflectionPhase === 'preparing'}
+        preparationError={reflectionPreparationError}
+        suppressed={isFocusMode}
+        range={recallRange}
+        perspective={reflectionPerspective}
+        revision={tagsRev}
+        sidebarInteractive={sidebarPinned && visibleSidebar}
+        theme={activeTheme as Theme}
+        themeConfig={themeConfig}
+        onRangeChange={range => updateRecallRange(range)}
+        onPerspectiveChange={setReflectionPerspective}
+        onClose={closeReflection}
+        onNavigate={navigateReflection}
+        onRetryPreparation={() => { void openReflection(reflectionPerspective); }}
+        onExportBusyChange={changeReflectionExportBusy}
+        aiSettingsRevision={aiSettingsRevision}
+        onOpenAISettings={openReflectionAISettings}
+        paused={aiSettingsFromReflection && panelOpen}
+      />
 
       {/* Command palette */}
       <CommandPalette
@@ -513,6 +694,7 @@ export default function App() {
         currentFilename={currentFilename}
         onTagManaged={() => setTagsRev(n => n + 1)}
         onNewArticle={() => { void createArticle(); }}
+        onOpenReflection={isFocusMode ? undefined : () => openReflection({ kind: 'all' })}
         onToday={async () => { if ((await switchToDocument(todayKey())).date) setPaletteOpen(false); }}
         onSelectResult={async (date, searchText) => !!(await switchToDocument(date, searchText)).date}
         onQuickJump={async (preset, customRange) => {
@@ -534,16 +716,20 @@ export default function App() {
         <TimelineSidebar
           isOpen={visibleSidebar}
           isPinned={sidebarPinned}
+          reflectionOpen={reflectionActive && sidebarPinned}
+          onReflectionContextChange={changeReflectionContext}
+          onOpenReflection={isFocusMode ? undefined : perspective => { void openReflection(perspective); }}
           onTogglePin={() => setSidebarPinned(pinned => !pinned)}
           setIsOpen={open => { setSidebarOpen(open); if (!open) setSidebarPinned(false); }}
           isPaletteOpen={paletteOpen}
           externalForceTag={forcedTag}
           onClearForceTag={() => setForcedTag(null)}
-          onNewArticle={() => { void createArticle(); }}
+          onNewArticle={reflectionActive ? undefined : () => { void createArticle(); }}
           currentFilename={currentFilename}
           tagsRev={tagsRev}
           theme={activeTheme}
           onBlockClick={(text) => {
+            if (reflectionState.current.active) return;
             setTargetSearchText(text);
             if (!sidebarPinned) setSidebarOpen(false);
           }}
@@ -558,7 +744,7 @@ export default function App() {
           rangeLoading={rangeLoading}
           rangeError={rangeError}
           rangeLabel={rangeLabel}
-          onClearRange={() => { rangeRequest.current += 1; setRecallPeriod(null); setRecallRange(null); setRangeLabel(null); setRangeError(null); setRangeLoading(false); }}
+          onClearRange={() => updateRecallRange(null)}
           onSelectResult={async (date, searchText) => {
             if (!(await switchToDocument(date, searchText)).date) return;
             if (!sidebarPinned) setSidebarOpen(false);
@@ -584,6 +770,9 @@ export default function App() {
         activeTheme={activeTheme as Theme}
         focusDuration={focusDuration}
         onFocusDurationChange={setFocusDuration}
+        aiOpenRequested={aiSettingsRequested}
+        onAISaved={config => setAISettingsRevision(value => Math.max(value + 1, config.revision))}
+        actionsDisabled={aiSettingsFromReflection}
         storageBusy={storageBusy || loading}
         onOpenStorage={() => { void invoke('open_storage_folder').catch(cause => setStorageError(String(cause))); }}
         onOpenBackups={() => { void invoke('open_backups_folder').catch(cause => setStorageError(String(cause))); }}

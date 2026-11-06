@@ -6,10 +6,11 @@ const units: { unit: RecallUnit; label: string }[] = [
   { unit: 'week', label: '周' }, { unit: 'month', label: '月' }, { unit: 'year', label: '年' },
 ];
 
-export function RecallPeriodNavigation({ period, fallbackAnchor, onChange }: {
+export function RecallPeriodNavigation({ period, fallbackAnchor, onChange, onClear }: {
   period?: RecallPeriod | null;
   fallbackAnchor?: string;
   onChange: (period: RecallPeriod) => void;
+  onClear?: () => void;
 }) {
   const [picking, setPicking] = useState(false);
   const [value, setValue] = useState('');
@@ -54,6 +55,7 @@ export function RecallPeriodNavigation({ period, fallbackAnchor, onChange }: {
           setPicking(open => !open);
         }}>{periodLabel(period)}</button>
         <button type="button" className="quiet-button recall-period-arrow" aria-label={`下一${unitLabel}`} onClick={() => choose(shiftPeriod(period, 1))}><ChevronRight size={16} /></button>
+        {onClear && <button type="button" className="quiet-button recall-period-arrow" aria-label="清除时间筛选" title="清除时间筛选" onClick={() => { setPicking(false); onClear(); }}><X size={13} /></button>}
       </div>
       {!current && <button type="button" className="quiet-button recall-period-today" onClick={() => choose({ unit, anchor: today })}>回到本{unitLabel}</button>}
     </>}

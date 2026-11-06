@@ -23,7 +23,7 @@ Before publishing, configure the GitHub Actions secret `TAURI_SIGNING_PRIVATE_KE
 
 ## Product website
 
-`website/` is a standalone static site with actual interface screenshots using sample notes, theme previews, and platform downloads. Preview with `python3 -m http.server 4174 --directory website`. Downloads resolve the latest official GitHub Release, with a release-page fallback if the API is unavailable.
+`website/` is a standalone static site with actual interface screenshots using sample notes, theme previews, a browsable sample reflection letter, and platform downloads. The letter uses sample content to show the current development build; downloaded packages follow their respective Release notes. Preview with `python3 -m http.server 4174 --directory website`. Downloads resolve the latest official GitHub Release, with a release-page fallback if the API is unavailable.
 
 Set repository Settings → Pages → Source to **GitHub Actions** to enable deployment through `website.yml`. The workflow deployment result provides the published URL.
 
@@ -53,6 +53,8 @@ Notes are stored as plain `.md` files, by default in `Documents/Silens_Notes`. T
 - [x] **Wiki links**: `[[document]]` completion and `[[file|label]]` aliases, with forward navigation and prefix, substring, and fuzzy matching.
 - [x] **Snapshots & workspace migration**: Publish backups after verification; copy and verify notes during migration while retaining originals.
 - [x] **Backlinks**: A collapsed section below the note shows referring notes and context; click to return to a source. Hidden in focus mode.
+- [x] **Reflection scroll**: A locally generated, deterministic review with date and perspective filters, refreshed excerpts, source navigation, and PNG/JPG letter exports.
+- [x] **Optional AI reflection prose**: Disabled by default; preview the sanitized context and confirm each single request. Generated titles and epilogues appear only in the current scroll and its image export.
 - [ ] **AI-assisted organization**: Future work only; processing or uploading notes must require explicit user opt-in.
 
 ## Tech Stack
@@ -91,9 +93,25 @@ Workspace migration accepts a folder on your machine, including a local iCloud D
 
 Third-party software handles cross-device synchronization. Silens does not guarantee detection or merging of concurrent edits. Backups remain in `Documents/Silens_Backups`, but `Documents` may itself be cloud-managed, so these snapshots are not guaranteed to be independent offline copies.
 
-### 4. AI roadmap
+### 4. Reflection scroll
 
-Tag organization and search currently run locally. AI-assisted organization is not implemented. Any future cloud AI feature must require explicit opt-in and explain what it processes and uploads; it must not silently upload notes in the background by default.
+Gather daily notes and titled pieces from a period into a letter. Statistics, themes, articles, and excerpts are assembled locally using deterministic rules, with no AI required. Optional AI titles and epilogues are described separately below.
+
+- **Open a scroll**: When the sidebar's current range and perspective contain records, it shows “拾遗这段时光 · N 段记录” (Reflect on this time · N records). You can also press `Cmd/Ctrl + K` and choose “时光拾遗（周期回顾）”.
+- **Dates and perspectives**: Start with the current review range, then choose the past month, this quarter, this year, all time, or custom dates. Perspectives include All, Untagged (“未命名”), Titled pieces, and up to five top tags with records in the selected range.
+- **Four chapters**: “光阴刻度” (Marks of time) shows writing days, record counts, and a rich day; “万象与深潜” (Themes and deeper reading) revisits tags and works mentioned in your writing; “慢火长卷” (Slowly growing pieces) highlights sustained writing and referenced articles; “吉光片羽” (Selected fragments) brings back excerpts. Chapters appear when relevant content exists. “换一束光” (Another light) changes only the selected excerpts.
+- **Return to writing**: Opening, filtering, and closing the scroll preserve the current editor document. Only source cards navigate to another note. The empty-state action “回到今日落笔” closes the scroll and focuses the current document, without opening today's file.
+- **Export a letter**: Choose PNG or JPG and click “导出为长图信笺” to save the full scroll. The image includes the letter and excludes controls such as filters, close, and excerpt refresh.
+
+### 5. Optional AI reflection prose
+
+Tag organization and search remain local. Under “书写氛围 → AI 拾遗伴侣,” you can configure a loopback OpenAI-compatible service such as Ollama or an HTTPS cloud endpoint. AI is disabled by default. Launching the app, saving notes, opening a reflection, or saving endpoint settings never triggers an AI request. Each request requires opening the transparency drawer, reviewing its complete sanitized JSON, and explicitly confirming generation; failures and timeouts are not retried automatically.
+
+The context comes only from the current reflection: summary statistics, at most three works, two brewed article titles, and four selected excerpts. The complete user-context JSON is capped at 1,500 Unicode characters, including field names, whitespace, and punctuation. Its preview matches the user message sent to the model; fixed writing instructions are sent separately. It excludes the full library, full article bodies, local paths, Markdown filenames, and second-resolution timestamps. Excerpts can still contain personal information the user wrote, so review remains important.
+
+Local mode connects only to loopback addresses, disables proxies and redirects, and sends no API key; the local service itself should perform local inference. Cloud keys use the system credential store: macOS Keychain, Windows Credential Manager, or Linux Secret Service. Nonsecret configuration stays in the app-local directory, outside the workspace, snapshots, and localStorage. Linux cloud mode requires Secret Service and `secret-tool` (usually supplied by `libsecret-tools`); unavailable credential storage produces an error rather than a plaintext fallback. Saving disabled or local mode removes the stored key.
+
+Generated titles and epilogues are used only in the current reflection and its PNG/JPG export. They never modify note files and are cleared when the scroll closes; no AI text cache is persisted. AI-assisted organization remains future work. Any future cloud AI feature must require explicit opt-in and explain what it processes and uploads; it must not silently upload notes in the background by default.
 
 ## Keyboard Shortcuts
 

@@ -72,6 +72,32 @@ play.addEventListener('click', () => {
 });
 motionPreference.addEventListener('change', () => { stopWritingDemo(); });
 
+const reflectionViews = {
+  overview: ['光阴刻度', '日期与标签筛选下方是一封信笺，卷首展示落笔日子和丰盈的一天', '01'],
+  articles: ['慢火长卷', '持续打磨的篇目与引用来源，点击卡片可回到原文', '02'],
+  fragments: ['吉光片羽', '深夜独白、未命名的瞬间与精选原文片段', '03'],
+};
+const reflectionImage = document.getElementById('reflection-image');
+const reflectionLink = document.getElementById('reflection-image-link');
+for (const button of document.querySelectorAll('[data-reflection]')) {
+  button.addEventListener('click', () => {
+    const view = button.dataset.reflection;
+    const [name, description, number] = reflectionViews[view];
+    for (const option of document.querySelectorAll('[data-reflection]')) option.setAttribute('aria-pressed', String(option === button));
+    document.getElementById('reflection-mobile-source').srcset = `./assets/reflection-${view}-mobile.jpg`;
+    reflectionImage.src = `./assets/reflection-${view}.jpg`;
+    reflectionImage.alt = `时光拾遗实际界面：${description}`;
+    reflectionLink.href = reflectionImage.src;
+    reflectionLink.setAttribute('aria-label', `查看${name}原图（新窗口）`);
+    document.getElementById('reflection-page-number').textContent = `${number} / 03`;
+    document.getElementById('reflection-caption').textContent = `实际界面 · ${name} · 示例笔记，点击可看原图`;
+  });
+}
+reflectionLink.addEventListener('click', () => { reflectionLink.href = reflectionImage.currentSrc || reflectionImage.src; });
+for (const link of document.querySelectorAll('a[href="#ai-privacy"]')) {
+  link.addEventListener('click', () => { document.getElementById('ai-privacy').open = true; });
+}
+
 const recallDescriptions = {
   timeline: ['按创作时间回顾', '随记与篇目按创作日期共同展示', 1100, 820, 320, 740],
   tags: ['标签与时间交叉回顾', '同一标签下展示随记片段与篇目标题摘要，切换标签保留日期范围', 1100, 820, 320, 740],
@@ -93,6 +119,7 @@ for (const button of document.querySelectorAll('[data-recall]')) {
     mobileSource.width = mobileWidth;
     mobileSource.height = mobileHeight;
     document.getElementById('recall-caption').textContent = `实际界面 · ${name} · 示例笔记`;
+    document.getElementById('recall-description').textContent = button.lastElementChild.textContent;
   });
 }
 
