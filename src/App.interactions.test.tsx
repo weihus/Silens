@@ -93,7 +93,7 @@ describe('App overlay interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
     const search = await screen.findByRole('dialog', { name: '搜索笔记' });
     fireEvent.click(within(search).getByRole('button', { name: '查看本周' }));
-    expect(await screen.findByText('创作时间 · 本周')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '选择回顾周期' })).toHaveTextContent(periodLabel({ unit: 'week', anchor: today }));
     expect(await screen.findByText('本周开始的篇目')).toBeInTheDocument();
     expect(screen.queryByText('本周修改的旧篇目')).not.toBeInTheDocument();
     expect(ipc.mock.calls.filter(([command]) => command === 'load_document')).toHaveLength(initialLoads);
@@ -137,15 +137,15 @@ describe('App overlay interactions', () => {
 
   it('keeps settings and search mutually exclusive in both directions', async () => {
     await renderReadyApp();
-    fireEvent.click(screen.getByTitle('氛围设置 (⌘⇧M)'));
-    expect(screen.getByRole('dialog', { name: '书写氛围' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument();
 
     shortcut('k');
     expect(await screen.findByRole('dialog', { name: '搜索笔记' })).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: '书写氛围' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '设置' })).not.toBeInTheDocument();
 
     shortcut('m', true);
-    expect(await screen.findByRole('dialog', { name: '书写氛围' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: '设置' })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '搜索笔记' })).not.toBeInTheDocument());
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });

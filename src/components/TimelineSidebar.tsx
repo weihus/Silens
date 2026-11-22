@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { ArrowLeft, ArrowUpRight, CalendarDays, FilePenLine, Pin, Plus, X } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Pin, Plus, X } from 'lucide-react';
 import type { Document, RecallDay, RecallRange, ReflectionPerspective } from '../types';
 import { documentDate, withinRange, type RecallPeriod } from '../utils/recall';
 import { RecallPeriodNavigation } from './RecallPeriodNavigation';
@@ -570,6 +570,7 @@ export const TimelineSidebar: React.FC<{
               <div className="recall-tabs" role="group" aria-label="回顾视角">
                 <button type="button" aria-pressed={viewMode === 'timeline'} onClick={() => { setViewMode('timeline'); setShowJumpPopover(false); }}>时间</button>
                 <button type="button" aria-pressed={viewMode === 'tag' || viewMode === 'all-tags'} onClick={() => { setViewMode('all-tags'); setShowJumpPopover(false); }}>标签</button>
+                <button type="button" aria-label="浏览篇目" aria-pressed={viewMode === 'articles'} onClick={() => { setViewMode('articles'); setShowJumpPopover(false); }}>篇目</button>
               </div>
               <div ref={jumpPopoverRef} className="relative">
                 <button ref={dateButtonRef} type="button" className="quiet-button recall-date-button" aria-label="筛选创作时间" title="按创作时间筛选"
@@ -672,13 +673,7 @@ export const TimelineSidebar: React.FC<{
               onPeriodChange?.(returnYear);
               setReturnYear(null);
             }}><ArrowLeft size={13} /> 返回 {returnYear.anchor.slice(0, 4)} 年</button>}
-            <button type="button" className="quiet-button recall-continue" aria-label="浏览篇目" aria-pressed={viewMode === 'articles'}
-              onClick={() => { setViewMode('articles'); setShowJumpPopover(false); }}>
-              <FilePenLine size={15} />
-              <span className="flex-1 text-left">继续写作</span>
-              <span className="recall-continue-count">{visibleArticles.length} 篇</span>
-              <ArrowUpRight size={14} />
-            </button>
+
 
             {/* 动态透视容器：时间轴 vs 标签透视 */}
             {inRangeMode && !hasPeriodHeading && <div className="mb-3 flex items-center gap-2 px-8 text-xs" style={{ color: 'var(--theme-muted)' }}>
@@ -696,7 +691,7 @@ export const TimelineSidebar: React.FC<{
             )}
             {onOpenReflection && reflectionCount > 0 && <button type="button" className="reflection-entry quiet-button" aria-label="展开时光拾遗"
               disabled={reflectionOpen} onClick={() => onOpenReflection(reflectionPerspective)}>
-              <span>拾遗这段时光 · {reflectionCount} 段记录</span><span>展卷 ↗</span>
+              <span>生成回顾 · {reflectionCount} 段记录</span>
             </button>}
             <div ref={contentRef} className="flex-1 relative w-full h-full overflow-hidden">
                 {viewMode === 'articles' ? (
@@ -708,8 +703,10 @@ export const TimelineSidebar: React.FC<{
                     {dataLoading || dataFailed ? <div role="status" className="py-8 text-sm" style={{ color: 'var(--theme-muted)' }}>
                       {dataLoading ? '正在加载…' : <button onClick={() => setRetry(n => n + 1)}>读取失败，点击重试</button>}
                     </div> : visibleArticles.length === 0 ? <div className="py-8 text-sm leading-loose" style={{ color: 'var(--theme-muted)' }}>
-                      <p>让一个想法，慢慢成为一篇。</p>
-                      <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onNewArticle}>新建篇目</button>
+                      <p>{articles.length ? "这个时间范围内没有篇目" : "还没有篇目"}</p>
+                      {articles.length > 0
+                        ? <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onClearRange}>查看全部篇目</button>
+                        : onNewArticle && <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onNewArticle}>新建第一篇</button>}
                     </div> : visibleArticles.map(doc => {
                       const tags = doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body);
                       return <ArticleCard key={doc.filename} current={currentFilename === doc.filename}

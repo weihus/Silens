@@ -52,7 +52,7 @@ it('counts actual records across timeline, all tags and filtered articles', asyn
   const open = vi.fn();
   const view = render(<TimelineSidebar {...props} onOpenReflection={open} />);
   expect(reflectionEntry()).not.toBeInTheDocument();
-  expect(await screen.findByText('拾遗这段时光 · 3 段记录')).toBeInTheDocument();
+  expect(await screen.findByText('生成回顾 · 3 段记录')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '标签' }));
   expect(reflectionEntry()).toHaveTextContent('3 段记录');
   fireEvent.click(screen.getByRole('button', { name: '浏览篇目' }));
@@ -83,7 +83,7 @@ it('counts filtered tag blocks, preserving identical journal text and deduplicat
 it('hides retained parent results during revision, failure and reopening', async () => {
   const open = vi.fn();
   const view = render(<TimelineSidebar {...props} onOpenReflection={open} />);
-  await screen.findByText('拾遗这段时光 · 3 段记录');
+  await screen.findByText('生成回顾 · 3 段记录');
   const query = deferred<RecallDay[]>();
   vi.mocked(invoke).mockImplementation(async command => command === 'get_timeline_data' ? query.promise : documents);
   view.rerender(<TimelineSidebar {...props} tagsRev={1} onOpenReflection={open} />);
@@ -96,7 +96,7 @@ it('hides retained parent results during revision, failure and reopening', async
   view.rerender(<TimelineSidebar {...props} tagsRev={1} onOpenReflection={open} />);
   expect(reflectionEntry()).not.toBeInTheDocument();
   await act(async () => reopened.resolve(days));
-  expect(await screen.findByText('拾遗这段时光 · 3 段记录')).toBeInTheDocument();
+  expect(await screen.findByText('生成回顾 · 3 段记录')).toBeInTheDocument();
 });
 
 it('ignores stale tag and range responses and hides errors until retry succeeds', async () => {
@@ -140,7 +140,7 @@ it('keeps the active timeline count when an outgoing tag request completes', asy
   const view = render(<TimelineSidebar {...props} externalForceTag="研究" onOpenReflection={open} />);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('query_blocks_by_tag', { tag: '研究' }));
   fireEvent.click(screen.getByRole('button', { name: '时间' }));
-  expect(await screen.findByText('拾遗这段时光 · 3 段记录')).toBeInTheDocument();
+  expect(await screen.findByText('生成回顾 · 3 段记录')).toBeInTheDocument();
   await act(async () => query.resolve(blocks));
   expect(reflectionEntry()).toHaveTextContent('3 段记录');
   fireEvent.click(reflectionEntry()!);
@@ -295,14 +295,14 @@ it('shows articles and tagged journal fragments together on their creation days'
   expect(open).toHaveBeenCalledWith('article-old.md');
 });
 
-it('keeps time and tags as the two primary views with a separate writing entry', async () => {
+it('groups time, tags and articles as three recall views', async () => {
   render(<TimelineSidebar {...props} />);
   await screen.findByRole('region', { name: '2020-01-02 的笔记' });
   const views = within(screen.getByRole('group', { name: '回顾视角' }));
-  expect(views.getAllByRole('button')).toHaveLength(2);
+  expect(views.getAllByRole('button')).toHaveLength(3);
   expect(views.getByRole('button', { name: '时间' })).toHaveAttribute('aria-pressed', 'true');
   expect(views.getByRole('button', { name: '标签' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '浏览篇目' })).toHaveTextContent('继续写作');
+  expect(screen.getByRole('button', { name: '浏览篇目' })).toHaveTextContent('篇目');
 });
 
 it('opens recently modified articles for continuation while retaining creation sorting', async () => {

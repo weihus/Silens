@@ -57,9 +57,10 @@ export function AtmospherePanel({
       style={{ backgroundColor: activeTheme === 'night' ? '#171D1B' : activeTheme === 'paper' ? '#FAF8F5' : '#FFFFFF', color: themeConfig.text, borderColor: 'var(--theme-border)' }}
     >
       <div className="flex items-center justify-between">
-        <h2 id={titleId} className="text-sm font-medium">书写氛围</h2>
-        <button type="button" onClick={close} aria-label="关闭书写氛围" className="quiet-button p-2 rounded-md"><X size={16} /></button>
+        <h2 id={titleId} className="text-sm font-medium">设置</h2>
+        <button type="button" onClick={close} aria-label="关闭设置" className="quiet-button p-2 rounded-md"><X size={16} /></button>
       </div>
+      <h3 className="text-xs font-medium -mb-4">书写氛围</h3>
       <div role="group" aria-label="主题" className="flex gap-1">
         {([{ id: 'paper', label: '纸白' }, { id: 'white', label: '纯白' }, { id: 'night', label: '夜色' }] as const).map(({ id, label }) => (
           <button key={id} type="button" onClick={() => onChange({ theme: id, autoSync: false })}
@@ -103,7 +104,7 @@ export function AtmospherePanel({
       </div>
       <button type="button" disabled={actionsDisabled} onClick={onExport} className="quiet-button flex items-center gap-2 py-2 px-2 rounded-md text-xs self-start"><Download size={14} aria-hidden="true" />导出</button>
       <details className="border-t pt-4 text-xs" style={{ borderColor: 'var(--theme-border)', color: themeConfig.muted }}>
-        <summary className="cursor-pointer py-1">本地文件</summary>
+        <summary className="cursor-pointer py-1">笔记与备份</summary>
         <div className="flex flex-col gap-1 mt-3" aria-busy={storageBusy}>
           {[
             { label: '打开笔记文件夹', action: onOpenStorage },

@@ -97,12 +97,12 @@ it('opens AI settings over the same scroll without resetting its seed or replaci
   await waitFor(() => expect(trigger).toBeEnabled());
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole('button', { name: '前往AI设置' }));
-  const settings = await screen.findByRole('dialog', { name: '书写氛围' });
+  const settings = await screen.findByRole('dialog', { name: '设置' });
   await waitFor(() => expect(within(settings).getByText('AI 拾遗伴侣（可选）').closest('details')).toHaveAttribute('open'));
   expect(document.querySelector('[data-reflection-letter]')).toBe(letter);
   expect(document.querySelector('[aria-label="笔记正文"]')).toBe(body);
   expect(generationCalls()).toHaveLength(0);
-  fireEvent.click(within(settings).getByRole('button', { name: '关闭书写氛围' }));
+  fireEvent.click(within(settings).getByRole('button', { name: '关闭设置' }));
   expect(await screen.findByRole('dialog', { name: '时光拾遗' })).toBeInTheDocument();
   expect(document.querySelector('[data-reflection-letter]')).toBe(letter);
   expect(body.editor.getJSON()).toEqual(content);

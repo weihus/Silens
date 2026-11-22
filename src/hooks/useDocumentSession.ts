@@ -19,6 +19,7 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string } | null>(null);
   const session = useRef<Session | null>(null);
+  const retryRead = useRef<(() => Promise<boolean>) | null>(null);
   const busy = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queue = useRef<Promise<void>>(Promise.resolve());
@@ -41,6 +42,7 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
         setError(null);
         onSavedRef.current(current.filename, content);
       } catch (cause) {
+        retryRead.current = null;
         setStatus('error');
         setError(String(cause).includes('DOCUMENT_CONFLICT')
           ? '这篇笔记已在其他地方修改。可以保留当前副本后重新读取，或先导出文字。'
@@ -111,6 +113,7 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
           if (String(cause) === 'DOCUMENT_NOT_FOUND') {
             setNotice({ message: documentKind(nextFilename) === 'journal' ? '这一天还没有笔记' : '这篇笔记不存在或已被移走' });
           } else {
+            retryRead.current = () => open(nextFilename, allowMissing, recovery);
             setError('无法读取笔记，请检查文件夹是否可用。');
           }
           return false;
@@ -123,13 +126,17 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
       session.current = { filename: nextFilename, content, saved, ...parsed };
       setText(encoded);
       setTitle(parsed.title);
+      retryRead.current = null;
       setFilename(nextFilename);
       setStatus('saved');
       setError(null);
       onSavedRef.current(nextFilename, content);
       return true;
     } catch (cause) {
-      if (recovery === 'preserve') setError(`副本未能保存或笔记未能读取，当前文字保持不变。${String(cause)}`);
+      if (recovery === 'preserve') {
+        retryRead.current = () => open(nextFilename, allowMissing, recovery);
+        setError(`副本未能保存或笔记未能读取，当前文字保持不变。${String(cause)}`);
+      }
       return false;
     } finally {
       busy.current = false;
@@ -139,5 +146,5 @@ export function useDocumentSession(editor: Editor | null, onSaved: (filename: st
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  return { text, title, filename, loading, status, error, notice, change, changeTitle, getContent, open, flush };
+  return { text, title, filename, loading, status, error, notice, retryDocument: () => retryRead.current ? retryRead.current() : flush(), change, changeTitle, getContent, open, flush };
 }

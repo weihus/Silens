@@ -69,7 +69,7 @@ export function RecallTimeline({ days, onOpen, onSelectResult, onTag, onBrowseDa
             {groups.map(group => {
               const untagged = group.is_untagged ?? group.tag === '默认';
               return <div key={`${group.filename}:${group.tag}:${untagged}`} className="mb-8">
-                <button type="button" onClick={() => untagged ? onTag(group.tag, true) : group.tag === '默认' ? onTag(group.tag, false) : onTag(group.tag)} className="quiet-button mb-3 rounded py-1 text-xs tracking-wider" style={{ color: 'var(--theme-muted)' }}>{untagged ? '未命名的时刻' : `#${group.tag}`}</button>
+
                 <div className="space-y-4">
                   {group.blocks.map(({ content, index }) => {
                     const time = content.match(/^(\d{2}:\d{2})\s*([\s\S]*)/);
@@ -81,6 +81,7 @@ export function RecallTimeline({ days, onOpen, onSelectResult, onTag, onBrowseDa
                     </button>;
                   })}
                 </div>
+                <button type="button" onClick={() => untagged ? onTag(group.tag, true) : group.tag === '默认' ? onTag(group.tag, false) : onTag(group.tag)} className="quiet-button mt-2 rounded py-1 text-xs tracking-wider" style={{ color: 'var(--theme-muted)' }}>{untagged ? '未命名的时刻' : `#${group.tag}`}</button>
               </div>;
             })}
             {compact && !preview && count > 3 && <button type="button" className="quiet-button recall-expand-day" aria-expanded={!!expanded} onClick={() => onToggleDay?.(day.date)}>

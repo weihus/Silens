@@ -11,6 +11,7 @@ import { UpdateManager } from './components/UpdateManager';
 import { ExportDialog } from './components/ExportDialog';
 import { PeriodReflectionScroll } from './components/PeriodReflectionScroll';
 import { RestoreDialog } from './components/RestoreDialog';
+import type { Fragment } from '@tiptap/pm/model';
 import { Editor } from '@tiptap/react';
 import type { AtmosphereState, NoteTarget, ReflectionPerspective, Theme } from './types';
 import { computeTagFrequency, loadTagsByDoc, updateDocTags } from './utils/tags';
@@ -23,7 +24,7 @@ import { useAtmospherePanel } from './hooks/useAtmospherePanel';
 import { useAudio } from './hooks/useAudio';
 import { useThemeCSS } from './hooks/useThemeCSS';
 import { decodeEmptyLines } from './utils/emptyLines';
-import { displayTitle, documentKind, parseDocument } from './utils/documents';
+import { displayTitle, documentKind, parseDocument, serializeDocument } from './utils/documents';
 import type { RecallDay, RecallRange } from './types';
 import { periodLabel, periodRange, type RecallPeriod } from './utils/recall';
 import { SlidersHorizontal, Columns, Search, ArrowLeft } from 'lucide-react';
@@ -108,7 +109,19 @@ export default function App() {
   const [sidebarPinned, setSidebarPinned] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
-  const [storageError, setStorageError] = useState<string | null>(null);
+  const [recent, setRecent] = useState<[string, string][]>([]);
+  useEffect(() => {
+    if (!paletteOpen) return;
+    let active = true;
+    setRecent([]);
+    void invoke<[string, string][]>('recent_articles').then(rows => {
+      if (active) setRecent(rows ?? []);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [paletteOpen]);
+
+  const [storageError, setStorageError] = useState<string | { message: string; label: string; retry: () => void } | null>(null);
+  const expanding = useRef(false);
   const closing = useRef(false);
   const [tagsRev, setTagsRev] = useState(0);
   const [forcedTag, setForcedTag] = useState<string | null>(null);
@@ -195,7 +208,7 @@ export default function App() {
     setTagsRev(n => n + 1);
   }, []);
   const { text, title, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
-    change: changeText, changeTitle, getContent, open: openDocument, flush } = useDocumentSession(editor, onSaved);
+    change: changeText, changeTitle, getContent, open: openDocument, flush, retryDocument } = useDocumentSession(editor, onSaved);
 
   const closeReflection = useCallback((reason: 'dismiss' | 'navigate' | 'write' = 'dismiss', force = false) => {
     if (!reflectionState.current.active || (reflectionState.current.exporting && !force)) return;
@@ -345,7 +358,7 @@ export default function App() {
     return () => { disposed = true; stop?.(); };
   }, []);
 
-  const runStorageAction = useCallback(async (action: () => Promise<unknown>) => {
+  const runStorageAction = useCallback(async (label: string, action: () => Promise<unknown>) => {
     if (storageBusy || loading || reflectionState.current.active) return;
     setStorageBusy(true);
     setStorageError(null);
@@ -353,7 +366,8 @@ export default function App() {
       await flush();
       await action();
     } catch (cause) {
-      setStorageError(`操作未完成：${String(cause)}`);
+      setPanelOpenState(false);
+      setStorageError({ message: `${label}失败：${String(cause)}`, label: `重试${label}`, retry: () => { void runStorageAction(label, action); } });
     } finally {
       setStorageBusy(false);
     }
@@ -417,6 +431,14 @@ export default function App() {
   const rawDisplay = decodeEmptyLines(text);
   const charCount = (title + rawDisplay).replace(/\s/g, '').length;
   const article = !!currentFilename && documentKind(currentFilename) === 'article';
+  function openFolder(command: 'open_storage_folder' | 'open_backups_folder') {
+    setStorageError(null);
+    void invoke(command).catch(cause => {
+      setPanelOpenState(false);
+      setStorageError({ message: `无法打开文件夹：${String(cause)}`, label: '重新打开文件夹', retry: () => openFolder(command) });
+    });
+  }
+
   const currentTitle = currentFilename ? displayTitle(currentFilename, article ? title : '') : '正在打开笔记';
   const headerBg = `${themeConfig.bg}ed`;
 
@@ -429,6 +451,39 @@ export default function App() {
     setPaletteOpen(false);
     if (!sidebarPinned) setSidebarOpen(false);
   }, [storageBusy, loading, openDocument, setPaletteOpen, sidebarPinned, setSidebarOpen]);
+
+  async function expandSelection() {
+    if (!editor || article || loading || storageBusy || updateBusy || expanding.current || reflectionState.current.active) return;
+    const { doc, selection } = editor.state;
+    if (selection.empty || !doc.textBetween(selection.from, selection.to).trim()) return;
+    const stem = `article-${crypto.randomUUID()}`;
+    const filename = `${stem}.md`;
+    expanding.current = true;
+    setStorageBusy(true);
+    setPaletteOpen(false);
+    let created = false;
+    try {
+      const { markdown } = editor.storage as typeof editor.storage & {
+        markdown: { serializer: { serialize(content: Fragment): string }; getMarkdown(): string };
+      };
+      const body = decodeEmptyLines(markdown.serializer.serialize(selection.content().content));
+      await flush();
+      await invoke('save_document', { currentFilename: filename, expectedContent: null, content: serializeDocument('article', '', body) });
+      created = true;
+      if (editor.state.doc !== doc) throw new Error('原文已发生变化');
+      const end = selection.$to.depth ? selection.$to.after(1) : selection.to;
+      const link = editor.schema.nodes.paragraph.create(null, editor.schema.text(`[[${stem}|展开的篇目]]`));
+      editor.view.dispatch(editor.state.tr.insert(end, link));
+      changeText(markdown.getMarkdown());
+      await flush();
+      await openDocument(filename);
+    } catch (cause) {
+      setStorageError(created ? '篇目已创建，可从搜索面板继续写作。请检查随记中的链接与保存状态。' : `未能展开为篇目：${String(cause)}`);
+    } finally {
+      expanding.current = false;
+      setStorageBusy(false);
+    }
+  }
 
   // === Document navigation helper ===
   // 成功切换返回目标日期字符串；失败（文件不存在）返回 null
@@ -552,8 +607,8 @@ export default function App() {
           color: themeConfig.muted,
           background: 'none', border: 'none', cursor: 'pointer', padding: '10px',
         }}
-        aria-label="书写氛围"
-        title="氛围设置 (⌘⇧M)"
+        aria-label="设置"
+        title="设置 (Cmd/Ctrl + Shift + M)"
       >
         <SlidersHorizontal size={16} strokeWidth={1.5} />
       </button>
@@ -692,6 +747,9 @@ export default function App() {
         onOpenChange={setPaletteOpen}
         editor={editor}
         currentFilename={currentFilename}
+        recent={recent}
+        onExpandSelection={paletteOpen && !article && editor?.state?.selection?.empty === false && editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to).trim() ? expandSelection : undefined}
+        onExport={() => setExportOpen(true)}
         onTagManaged={() => setTagsRev(n => n + 1)}
         onNewArticle={() => { void createArticle(); }}
         onOpenReflection={isFocusMode ? undefined : () => openReflection({ kind: 'all' })}
@@ -774,11 +832,11 @@ export default function App() {
         onAISaved={config => setAISettingsRevision(value => Math.max(value + 1, config.revision))}
         actionsDisabled={aiSettingsFromReflection}
         storageBusy={storageBusy || loading}
-        onOpenStorage={() => { void invoke('open_storage_folder').catch(cause => setStorageError(String(cause))); }}
-        onOpenBackups={() => { void invoke('open_backups_folder').catch(cause => setStorageError(String(cause))); }}
+        onOpenStorage={() => { openFolder('open_storage_folder'); }}
+        onOpenBackups={() => { openFolder('open_backups_folder'); }}
         onRestore={() => { setPanelOpenState(false); setRestoreOpen(true); }}
-        onBackup={() => { void runStorageAction(async () => { await invoke('create_backup'); setToast('备份已保存'); }); }}
-        onMoveWorkspace={() => { void runStorageAction(async () => {
+        onBackup={() => { void runStorageAction('备份', async () => { await invoke('create_backup'); setToast('备份已保存'); }); }}
+        onMoveWorkspace={() => { void runStorageAction('迁移', async () => {
           const selected = await openFolderDialog({ directory: true, multiple: false, title: '选择笔记文件夹的位置' });
           if (typeof selected !== 'string') return;
           await invoke('change_storage_path', { newPath: selected });
@@ -823,10 +881,11 @@ export default function App() {
       {!dialogOpen && (saveError || storageError) && (
         <div role="alert" className="fixed bottom-16 left-1/2 z-[10000] w-[min(90vw,520px)] -translate-x-1/2 rounded-xl border p-4 text-sm shadow-sm"
           style={{ background: themeConfig.bg, color: themeConfig.text, borderColor: 'var(--theme-muted)' }}>
-          <p>{saveError || storageError}</p>
+          <p>{saveError || (typeof storageError === 'string' ? storageError : storageError?.message)}</p>
           <div className="mt-3 flex gap-4">
-            <button onClick={() => { void (currentFilename ? flush() : openDocument(`${todayKey()}.md`, true)).catch(() => {}); setStorageError(null); }}>重试</button>
-            <button onClick={() => setExportOpen(true)}>导出当前文字</button>
+            {saveError && <button onClick={() => { void retryDocument().catch(() => {}); }}>{saveStatus === 'error' ? '重试保存' : '重新读取'}</button>}
+            {saveError && <button onClick={() => setExportOpen(true)}>导出当前文字</button>}
+            {!saveError && storageError && typeof storageError !== 'string' && <button onClick={storageError.retry}>{storageError.label}</button>}
             {saveStatus === 'error' && currentFilename && <button onClick={() => { void openDocument(currentFilename, true, 'preserve'); }}>保留副本并重新读取</button>}
             {storageError && !saveError && <button onClick={() => setStorageError(null)}>收起</button>}
           </div>

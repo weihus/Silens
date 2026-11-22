@@ -120,7 +120,7 @@ it.each(['sidebar', 'title'])('returns from an empty period to the current body 
   const doc = editor.getJSON(); const selection = editor.state.selection.toJSON(); const undo = editor.can().undo();
   const scroller = document.getElementById('silens-scroll-container')!; scroller.scrollTop = 81;
   const loads = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'load_document').length;
-  const settings = screen.getByRole('button', { name: '书写氛围' });
+  const settings = screen.getByRole('button', { name: '设置' });
   if (source === 'sidebar') {
     fireEvent.click(screen.getByRole('button', { name: '回顾笔记' }));
     const sidebar = await screen.findByRole('complementary', { name: '时间与标签' });

@@ -23,6 +23,9 @@ interface CommandPaletteProps {
   currentFilename?: string | null;
   onTagManaged?: () => void;
   onSelectResult?: (date: string, searchText: string) => boolean | void | Promise<boolean | void>;
+  recent?: [string, string][];
+  onExpandSelection?: () => Promise<void>;
+  onExport?: () => void;
   onNewArticle?: () => void;
   onOpenReflection?: () => void | Promise<void>;
   onToday?: () => void;
@@ -54,7 +57,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onOpenChange,
   onSelectResult,
   onQuickJump,
-  onNewArticle,
+  recent = [], onNewArticle, onExpandSelection, onExport,
   onOpenReflection,
   onToday,
 }) => {
@@ -92,7 +95,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   // 零状态：时光穿梭快捷选项（查询为空时渲染，键盘可导航，回车触发）
   const QUICK_JUMP_ACTIONS: { id: string; label: string; action: () => void | Promise<void> }[] = [
+    ...(onExpandSelection ? [{ id: 'expand', label: '展开为篇目', action: onExpandSelection }] : []),
     ...(onNewArticle ? [{ id: 'new-article', label: '新建篇目', action: onNewArticle }] : []),
+    ...recent.map(([filename, title]) => ({
+      id: filename, label: `继续写作 · ${title || '未命名笔记'}`, action: async () => {
+        if (await onSelectResult?.(filename, '') === false) setNavigationFailed(true);
+        else onOpenChange(false);
+      },
+    })),
+    ...(onExport ? [{ id: 'export', label: '导出当前笔记', action: onExport }] : []),
     ...(onOpenReflection ? [{ id: 'reflection', label: '时光拾遗（周期回顾）', action: onOpenReflection }] : []),
     ...(onToday ? [{ id: 'today', label: '回到今天', action: onToday }] : []),
     { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
@@ -115,7 +126,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const runQuickAction = (item: typeof QUICK_JUMP_ACTIONS[number]) => {
     const action = item.action();
     if (action instanceof Promise) void action.catch(() => setNavigationFailed(true));
-    if (!['custom-range', 'new-article', 'today', 'reflection'].includes(item.id)) {
+    if (['yesterday', 'this-week', 'this-month', 'this-year'].includes(item.id)) {
       setQuery('');
       onOpenChange(false);
     }
@@ -124,6 +135,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // 打开时重置自定义区间子状态
   useEffect(() => {
     if (open) {
+      setNavigationFailed(false);
       setQuery('');
       setResults([]);
       setSelectedIndex(0);
@@ -162,48 +174,45 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query, open]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
 
-      // 零状态：查询为空时时光穿梭列表优先接管键盘
-      if (!query.trim()) {
-        // 自定义日期模式：仅手动"穿梭 →"触发，Esc 退出
-        if (customMode) return;
-        if (QUICK_JUMP_ACTIONS.length > 0) {
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setSelectedIndex((prev) => (prev + 1) % QUICK_JUMP_ACTIONS.length);
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setSelectedIndex((prev) => (prev - 1 + QUICK_JUMP_ACTIONS.length) % QUICK_JUMP_ACTIONS.length);
-          } else if (e.key === 'Enter') {
-            e.preventDefault();
-            const selected = QUICK_JUMP_ACTIONS[selectedIndex];
-            if (selected) runQuickAction(selected);
-          }
-          return;
+    // 零状态：查询为空时时光穿梭列表优先接管键盘
+    if (!query.trim()) {
+      // 自定义日期模式：仅手动"穿梭 →"触发，Esc 退出
+      if (customMode) return;
+      if (QUICK_JUMP_ACTIONS.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev + 1) % QUICK_JUMP_ACTIONS.length);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev - 1 + QUICK_JUMP_ACTIONS.length) % QUICK_JUMP_ACTIONS.length);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const selected = QUICK_JUMP_ACTIONS[selectedIndex];
+          if (selected) runQuickAction(selected);
         }
+        return;
       }
+    }
 
-      if (results.length === 0) return;
+    if (results.length === 0) return;
 
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % results.length);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 + results.length) % results.length);
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        const selected = results[selectedIndex];
-        if (selected) {
-          selectResult(selected, query);
-        }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex((prev) => (prev + 1) % results.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((prev) => (prev - 1 + results.length) % results.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = results[selectedIndex];
+      if (selected) {
+        selectResult(selected, query);
       }
-    },
-    [query, results, selectedIndex, onOpenChange, selectResult, onQuickJump, onNewArticle, onOpenReflection, onToday, customMode]
-  );
+    }
+  };
 
   // 4. 列表滚动跟随 (Scroll into view)
   useEffect(() => {
@@ -323,7 +332,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </div>
                 ) : (
                   <div className="p-2">
-                    <div className="px-3 pt-2 pb-1 text-[11px] opacity-45">按时间回顾</div>
+                    <div className="px-3 pt-2 pb-1 text-[11px] opacity-45">写作与回顾</div>
                     <div ref={listRef} className="flex max-h-[55vh] flex-col overflow-y-auto">
                       {QUICK_JUMP_ACTIONS.map((item, idx) => (
                         <button

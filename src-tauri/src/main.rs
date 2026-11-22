@@ -929,6 +929,19 @@ pub struct SearchResult {
 }
 
 #[tauri::command]
+async fn recent_articles(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
+    let state = app.state::<StorageLock>();
+    let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
+    let conn = get_db_connection(&app)?;
+    let mut statement = conn.prepare(
+        "SELECT stem || '.md', title FROM documents WHERE kind = 'article' ORDER BY modified DESC, stem LIMIT 3"
+    ).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<SearchResult>, String> {
     let query_trim = query.trim();
     if query_trim.is_empty() {
@@ -1649,6 +1662,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             save_document,
             get_all_documents,
+            recent_articles,
             load_document,
             rename_tag,
             delete_tag,
