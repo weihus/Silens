@@ -127,7 +127,7 @@ it.each(['sidebar', 'title'])('returns from an empty period to the current body 
     const entry = await within(sidebar).findByRole('button', { name: '展开时光拾遗' });
     act(() => entry.focus()); fireEvent.click(entry);
   } else await openFromCommand();
-  const action = await screen.findByRole('button', { name: '回到今日落笔 →' });
+  const action = await screen.findByRole('button', { name: '继续写作 →' });
   expect(settings).toHaveStyle({ visibility: 'hidden' });
   expect(document.querySelector('.chrome-footer')).toHaveStyle({ visibility: 'hidden' });
   fireEvent.click(action);

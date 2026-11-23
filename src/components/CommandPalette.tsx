@@ -66,6 +66,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showQuickSelection, setShowQuickSelection] = useState(false);
+  const [expandedForResults, setExpandedForResults] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [searchAttempt, setSearchAttempt] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
   const [navigationFailed, setNavigationFailed] = useState(false);
   const selectResult = useCallback((result: SearchResult, searchText: string) => {
@@ -165,7 +168,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // 2. 防抖搜索与 IPC 调用
   useEffect(() => {
     setResults([]);
+    setSearchFailed(false);
     if (!open || !query.trim()) {
+      setExpandedForResults(false);
       setIsSearching(false);
       return;
     }
@@ -178,17 +183,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         const res = await invoke<SearchResult[]>('search_notes', { query: query.trim() });
         if (cancelled) return;
         setResults(res || []);
+        if (res?.length) setExpandedForResults(true);
         setSelectedIndex(0);
-      } catch (err) {
-        console.error('Search error:', err);
-        if (!cancelled) setResults([]);
+      } catch {
+        if (!cancelled) setSearchFailed(true);
       } finally {
         if (!cancelled) setIsSearching(false);
       }
     }, 300);
 
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [query, open]);
+  }, [query, open, searchAttempt]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -269,7 +274,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               aria-modal="true"
               className="command-palette w-[calc(100%-32px)] rounded-xl border shadow-lg overflow-hidden flex flex-col"
               style={{
-                maxWidth: results.length > 0 ? 680 : 460,
+                maxWidth: expandedForResults ? 680 : 460,
                 transition: reducedMotion ? 'none' : 'max-width 180ms ease-out',
                 backgroundColor: 'var(--theme-bg)',
                 borderColor: 'var(--theme-border)',
@@ -422,8 +427,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   )}
                 </>
               ) : (
-                <div role="status" className="w-full h-[112px] flex items-center justify-center text-[13px] opacity-45">
-                  {isSearching ? '正在搜索…' : '未找到相关内容'}
+                <div className="flex h-[112px] w-full items-center justify-center gap-3 text-[13px]">
+                  <span role="status" style={{ color: 'var(--theme-muted)' }}>
+                    {isSearching ? '正在搜索…' : searchFailed ? '搜索暂时失败' : '未找到相关内容'}
+                  </span>
+                  {searchFailed && (
+                    <button type="button" className="quiet-button rounded-md px-2 py-1"
+                      onClick={() => { inputRef.current?.focus(); setSearchAttempt(attempt => attempt + 1); }}>
+                      重试
+                    </button>
+                  )}
                 </div>
               )}
             </div>

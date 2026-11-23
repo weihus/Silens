@@ -29,6 +29,32 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); });
 
+it('keeps the expanded width while refining a search and resets on clear or close', async () => {
+  const match = [{ id: '1', date: '2026-10-15', snippet: '雨', context_preview: '窗外的雨' }];
+  vi.mocked(invoke).mockResolvedValueOnce(match).mockResolvedValueOnce([]).mockResolvedValueOnce(match);
+  const close = vi.fn();
+  const view = render(<CommandPalette open onOpenChange={close} />);
+  const width = () => screen.getByRole('dialog').style.maxWidth;
+  const type = (value: string) => fireEvent.change(screen.getByRole('textbox'), { target: { value } });
+  const finishSearch = () => act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  type('雨');
+  expect(width()).toBe('460px');
+  await finishSearch();
+  expect(width()).toBe('680px');
+  type('雨停');
+  expect(width()).toBe('680px');
+  await finishSearch();
+  expect(width()).toBe('680px');
+  type('');
+  expect(width()).toBe('460px');
+  type('雨');
+  await finishSearch();
+  expect(width()).toBe('680px');
+  view.rerender(<CommandPalette open={false} onOpenChange={close} />);
+  view.rerender(<CommandPalette open onOpenChange={close} />);
+  expect(width()).toBe('460px');
+});
+
 it('clears old search results immediately and ignores requests resolved after closing', async () => {
   const first = deferred<SearchResult[]>();
   const second = deferred<SearchResult[]>();
@@ -107,6 +133,21 @@ it('shows preview only for results and preserves result keyboard selection', asy
   expect(select).toHaveBeenCalledWith('2026-10-14', 'note');
   expect(close).toHaveBeenCalledWith(false);
   expect(screen.queryByRole('region', { name: '笔记预览' })).toBeNull();
+});
+
+it('retries a failed search with the same query and distinguishes an empty result', async () => {
+  vi.mocked(invoke).mockRejectedValueOnce(new Error('读取失败')).mockResolvedValueOnce([]);
+  render(<CommandPalette open onOpenChange={vi.fn()} />);
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value: '雨' } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  expect(screen.getByRole('status').textContent).toBe('搜索暂时失败');
+  fireEvent.click(screen.getByRole('button', { name: '重试' }));
+  expect(input).toHaveValue('雨');
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  expect(invoke).toHaveBeenLastCalledWith('search_notes', { query: '雨' });
+  expect(screen.getByRole('status').textContent).toBe('未找到相关内容');
+  expect(screen.queryByRole('button', { name: '重试' })).toBeNull();
 });
 
 it('keeps no-results search free of a preview', async () => {

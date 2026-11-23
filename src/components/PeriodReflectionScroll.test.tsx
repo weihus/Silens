@@ -137,7 +137,7 @@ it('queries exact controlled perspectives/dates/seeds and keeps All-scope capsul
   fireEvent.click(button('换一束光')); await waitFor(() => expect(screen.getByText('光影 1')).toBeTruthy());
   expect(get).toHaveBeenCalledTimes(3);
   expect(get).toHaveBeenLastCalledWith(expect.objectContaining({ perspective: { kind: 'tag', tag: '非热门' }, pageSeed: 1 }));
-  fireEvent.click(button('未命名')); expect(p.onPerspectiveChange).toHaveBeenLastCalledWith({ kind: 'untagged' });
+  fireEvent.click(button('无标签')); expect(p.onPerspectiveChange).toHaveBeenLastCalledWith({ kind: 'untagged' });
   rerender(<PeriodReflectionScroll {...p} range={{ end: '2026-06-30' }} perspective={{ kind: 'articlesOnly' }} />); await ready();
   expect(get).toHaveBeenLastCalledWith({ startDate: null, endDate: '2026-06-30', perspective: { kind: 'articlesOnly' }, pageSeed: 0 });
   fireEvent.click(button('独立篇目')); expect(p.onPerspectiveChange).toHaveBeenLastCalledWith({ kind: 'articlesOnly' });
@@ -171,11 +171,11 @@ it('offers All for an empty perspective and excludes the action from the letter 
 it('returns to writing only when the full period is empty and hides stale actions during refresh', async () => {
   get.mockImplementation(async query => empty(query));
   const p = props(); const { rerender } = render(<PeriodReflectionScroll {...p} />); await ready();
-  fireEvent.click(button('回到今日落笔 →'));
+  fireEvent.click(button('继续写作 →'));
   expect(p.onClose).toHaveBeenCalledExactlyOnceWith('write');
   const pending = deferred<PeriodReflectionResult>(); get.mockReturnValueOnce(pending.promise);
   rerender(<PeriodReflectionScroll {...p} range={{ start: '2026-06-01' }} />);
-  expect(screen.queryByRole('button', { name: '回到今日落笔 →' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '继续写作 →' })).toBeNull();
   await act(async () => pending.resolve(empty({ startDate: '2026-06-01' })));
 });
 
@@ -185,9 +185,9 @@ it('waits for All and retries its failure without claiming the full period is em
   const p = props({ perspective: { kind: 'untagged' } });
   render(<PeriodReflectionScroll {...p} />); await ready();
   expect(screen.getByText('正在查看这段时光…')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '回到今日落笔 →' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '继续写作 →' })).toBeNull();
   await act(async () => all.reject(new Error('读取全部失败')));
-  expect(screen.queryByRole('button', { name: '回到今日落笔 →' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '继续写作 →' })).toBeNull();
   get.mockImplementation(async query => fixture(query));
   fireEvent.click(button('重新查看这段时光 →'));
   await waitFor(() => expect(button('查看这段时光的全部随想 →')).toBeEnabled());

@@ -141,7 +141,7 @@ export function PeriodReflectionScroll({ open, preparing = false, preparationErr
       busyCallback.current?.(true);
       const query = reflection.result.query;
       const view = query.perspective;
-      const label = view.kind === 'tag' ? view.tag : view.kind === 'untagged' ? '未命名' : view.kind === 'articlesOnly' ? '独立篇目' : '全部';
+      const label = view.kind === 'tag' ? view.tag : view.kind === 'untagged' ? '无标签' : view.kind === 'articlesOnly' ? '独立篇目' : '全部';
       const filename = `时光拾遗-${query.startDate ?? '起初'}-${query.endDate ?? '至今'}-${label}`.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-');
       const bytes = await captureImage(letterRef.current, {
         format, backgroundColor: themeConfig.bg, color: themeConfig.text, fullHeight: true,
@@ -170,11 +170,11 @@ export function PeriodReflectionScroll({ open, preparing = false, preparationErr
         if (disabled || aiOpen) return;
         if (reflectionHasContent(reflection.allResult!)) changePerspective({ kind: 'all' });
         else requestClose('write');
-      }}>{reflectionHasContent(reflection.allResult) ? '查看这段时光的全部随想 →' : '回到今日落笔 →'}</button> : null;
+      }}>{reflectionHasContent(reflection.allResult) ? '查看这段时光的全部随想 →' : '继续写作 →'}</button> : null;
   const choices: { label: string; value: ReflectionPerspective }[] = [
     { label: '全部', value: { kind: 'all' } },
     ...tags.map(tag => ({ label: `#${tag}`, value: { kind: 'tag' as const, tag } })),
-    { label: '未命名', value: { kind: 'untagged' } },
+    { label: '无标签', value: { kind: 'untagged' } },
     { label: '独立篇目', value: { kind: 'articlesOnly' } },
   ];
   return <AnimatePresence>{open && <ScrollBackdrop sidebarInteractive={sidebarInteractive} reducedMotion={!!reducedMotion}>
