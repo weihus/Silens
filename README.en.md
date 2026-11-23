@@ -72,7 +72,7 @@ The frontend and backend communicate through Tauri IPC:
 - **Optimistic conflict checks**: Before saving, disk content is compared with the last loaded or saved content. Detected changes or deletion cause the overwrite to be refused. Writes use a temporary file followed by replacement; failures show an error and retain the text in the editor so you can export a copy. This is not a cross-process lock or concurrent-edit merge mechanism.
 - **Save and back up before closing**: Closing the window waits for pending saves, then creates a backup before closing. If saving or backup fails, the window stays open and displays an error.
 - **Local snapshots**: Snapshots include notes and the workspace's `.silens-created.json` creation-date registry. They are created every 6 hours while the app runs, before closing the window, or through the manual backup action. They are stored in `Documents/Silens_Backups`. Files are copied to a staging directory and verified before the snapshot is published. Successful publication triggers retention of the latest 10 snapshots; cleanup failures may leave more than 10. Failed copies or verification do not trigger removal of older backups.
-- **In-app restore**: Under "设置 → 笔记与备份 → 恢复备份", snapshots are listed with their time and note count. Confirming restores the whole notes folder. The current notes are snapshotted first, so the same steps can return to the state before the restore; notes created after the chosen snapshot leave the folder but remain in that snapshot. "查看备份" still opens the backup folder.
+- **In-app restore**: Under "设置 → 笔记与备份 → 恢复备份", snapshots are listed with their time and note count. Confirming restores the whole notes folder. Pending edits are saved before the current notes are snapshotted, so the same steps can return to the state before the restore; notes created after the chosen snapshot leave the folder but remain in that snapshot. "查看备份" still opens the backup folder.
 
 ### 3. Workspaces & cloud folders
 
@@ -84,10 +84,10 @@ Third-party software handles cross-device synchronization. Silens does not guara
 
 Gather daily notes and titled pieces from a period into a letter. Statistics, themes, articles, and excerpts are assembled locally using deterministic rules, with no AI required. Optional AI titles and epilogues are described separately below.
 
-- **Open a scroll**: When the sidebar's current range and perspective contain records, it shows “生成回顾 · N 段记录” (Reflect on this time · N records). You can also press `Cmd/Ctrl + K` and choose “时光拾遗（周期回顾）”.
-- **Dates and perspectives**: Start with the current review range, then choose the past month, this quarter, this year, all time, or custom dates. Perspectives include All, Untagged (“未命名”), Titled pieces, and up to five top tags with records in the selected range.
+- **Open a scroll**: When the sidebar's current range and perspective contain records, it shows “生成回顾 · N 段记录” (Reflect on this time · N records). You can also press `Cmd/Ctrl + K` and choose “周期回顾”.
+- **Dates and perspectives**: Start with the current review range, then choose the past month, this quarter, this year, all time, or custom dates. Perspectives include All, Untagged (“无标签”), Titled pieces, and up to five top tags with records in the selected range.
 - **Four chapters**: “光阴刻度” (Marks of time) shows writing days, record counts, and a rich day; “万象与深潜” (Themes and deeper reading) revisits tags and works mentioned in your writing; “慢火长卷” (Slowly growing pieces) highlights sustained writing and referenced articles; “吉光片羽” (Selected fragments) brings back excerpts. Chapters appear when relevant content exists. “换一束光” (Another light) changes only the selected excerpts.
-- **Return to writing**: Opening, filtering, and closing the scroll preserve the current editor document. Only source cards navigate to another note. The empty-state action “回到今日落笔” closes the scroll and focuses the current document, without opening today's file.
+- **Return to writing**: Opening, filtering, and closing the scroll preserve the current editor document. Only source cards navigate to another note. The empty-state action “继续写作” closes the scroll and focuses the current document, without opening today's file.
 - **Export a letter**: Choose PNG or JPG and click “导出为长图信笺” to save the full scroll. The image includes the letter and excludes controls such as filters, close, and excerpt refresh.
 
 ### 5. Optional AI reflection prose

@@ -301,7 +301,8 @@ it('lists snapshots and restores only after confirmation', async () => {
   });
   const restored = vi.fn();
   const close = vi.fn();
-  render(<RestoreDialog open onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
+  const savePending = deferred<void>();
+  render(<RestoreDialog open prepareRestore={() => savePending.promise} onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(screen.getByText('2026-10-01 03-04-05')).toBeTruthy();
   expect(screen.getByText(/3 篇/)).toBeTruthy();
@@ -309,24 +310,38 @@ it('lists snapshots and restores only after confirmation', async () => {
   expect(restored).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(invoke).not.toHaveBeenCalledWith('restore_backup', expect.anything());
+  await act(async () => { savePending.resolve(undefined); });
   expect(vi.mocked(invoke)).toHaveBeenCalledWith('restore_backup', { id: '2026-10-01_03-04-05' });
   expect(restored).toHaveBeenCalledWith('2026-10-01_03-04-05');
   expect(close).toHaveBeenCalledOnce();
 });
 
-it('keeps the dialog open and the notes untouched when restoring fails', async () => {
-  vi.mocked(invoke).mockImplementation(async (command: string) => {
-    if (command === 'list_backups') return [{ id: '2026-10-01_03-04-05', created: '2026-10-01 03-04-05', files: 1 }];
-    throw new Error('disk full');
-  });
-  const restored = vi.fn();
-  const close = vi.fn();
-  render(<RestoreDialog open onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
+it('blocks restore when the pending edit cannot be saved', async () => {
+  vi.mocked(invoke).mockResolvedValue([{ id: 'snapshot', created: '2026-10-01', files: 1 }]);
+  render(<RestoreDialog open prepareRestore={async () => { throw new Error('DOCUMENT_CONFLICT'); }}
+    onClose={vi.fn()} onRestored={vi.fn()} theme="paper" themeConfig={themeConfig} />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   fireEvent.click(screen.getByRole('button', { name: '恢复' }));
   fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-  expect(screen.getByRole('alert')).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith('restore_backup', expect.anything());
+  expect(screen.getByRole('alert')).toHaveTextContent('当前编辑尚未保存');
+});
+
+it('keeps the dialog open and reports a restore failure', async () => {
+  vi.mocked(invoke).mockImplementation(async (command: string) => {
+    if (command === 'list_backups') return [{ id: '2026-10-01_03-04-05', created: '2026-10-01 03-04-05', files: 1 }];
+    throw new Error('工作区可能已部分恢复。可选择恢复前的副本 safety-id。');
+  });
+  const restored = vi.fn();
+  const close = vi.fn();
+  render(<RestoreDialog open prepareRestore={async () => {}} onClose={close} onRestored={restored} theme="paper" themeConfig={themeConfig} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  fireEvent.click(screen.getByRole('button', { name: '恢复' }));
+  fireEvent.click(screen.getByRole('button', { name: '确认恢复' }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByRole('alert')).toHaveTextContent('safety-id');
   expect(restored).not.toHaveBeenCalled();
   expect(close).not.toHaveBeenCalled();
 });

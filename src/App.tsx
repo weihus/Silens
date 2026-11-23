@@ -348,7 +348,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async event => {
       event.preventDefault();
-      if (closing.current || closeState.current.loading || closeState.current.storageBusy || closeState.current.updateBusy || closeState.current.reflectionExportBusy || reflectionState.current.exporting) return;
+      if (closing.current || overlays.current.restoreOpen || closeState.current.loading || closeState.current.storageBusy || closeState.current.updateBusy || closeState.current.reflectionExportBusy || reflectionState.current.exporting) return;
       closing.current = true;
       setStorageBusy(true);
       try {
@@ -558,15 +558,45 @@ export default function App() {
     }
   }, [switchToDocument]);
 
+  const [linkReturn, setLinkReturn] = useState<{ source: string; destination: string; scrollTop: number } | null>(null);
+  const [returnPosition, setReturnPosition] = useState<{ filename: string; scrollTop: number } | null>(null);
+
+  useEffect(() => {
+    if (linkReturn && currentFilename !== linkReturn.destination) setLinkReturn(null);
+  }, [currentFilename, linkReturn]);
+
+  useEffect(() => {
+    if (!returnPosition || loading) return;
+    if (currentFilename === returnPosition.filename) {
+      const scroller = document.getElementById('silens-scroll-container');
+      if (scroller) scroller.scrollTop = returnPosition.scrollTop;
+    }
+    setReturnPosition(null);
+  }, [currentFilename, loading, returnPosition]);
+
+  const followNoteLink = useCallback(async (name: string, target?: NoteTarget) => {
+    const destination = name.endsWith('.md') ? name : `${name}.md`;
+    const scrollTop = document.getElementById('silens-scroll-container')?.scrollTop ?? 0;
+    const opened = await switchToDocument(destination, target);
+    if (opened.date && currentFilename && currentFilename !== destination) {
+      setLinkReturn({ source: currentFilename, destination, scrollTop });
+    }
+  }, [currentFilename, switchToDocument]);
+
+  const returnToLinkSource = async () => {
+    if (!linkReturn || loading || currentFilename !== linkReturn.destination) return;
+    const { source, scrollTop } = linkReturn;
+    if ((await switchToDocument(source)).date) setReturnPosition({ filename: source, scrollTop });
+  };
+
   useEffect(() => {
     const handleLink = (event: Event) => {
-      const docName = (event as CustomEvent<{ docName: string }>).detail.docName;
-      if (storageBusy) return;
-      void switchToDocument(docName);
+      const { docName } = (event as CustomEvent<{ docName: string }>).detail;
+      void followNoteLink(docName);
     };
     window.addEventListener('silens-link-click', handleLink);
     return () => window.removeEventListener('silens-link-click', handleLink);
-  }, [switchToDocument, storageBusy]);
+  }, [followNoteLink]);
 
   const updateRecallRange = useCallback((range: RecallRange | null, period: RecallPeriod | null = null, label?: string) => {
     if (reflectionState.current.exporting) return;
@@ -639,7 +669,7 @@ export default function App() {
       )}
 
 
-      <div data-writing-surface inert={reflectionActive} aria-hidden={reflectionActive || undefined}
+      <div data-writing-surface inert={reflectionActive || restoreOpen} aria-hidden={reflectionActive || restoreOpen || undefined}
         onFocusCapture={event => {
           if (event.target instanceof HTMLElement && event.target.closest('[data-note-content]')) lastWritingFocus.current = event.target;
         }}>
@@ -718,6 +748,11 @@ export default function App() {
         </button>
         <div className="flex min-h-5 items-center gap-3 text-xs" style={{ color: themeConfig.muted }}>
           {!article && <span className="max-w-[45vw] truncate">{currentFilename ? currentTitle : loading ? currentTitle : 'SILENS'}</span>}
+          {linkReturn?.destination === currentFilename && (
+            <button type="button" disabled={loading || storageBusy} className="flex items-center gap-1 hover:opacity-70 disabled:opacity-50" onClick={() => { void returnToLinkSource(); }}>
+              <ArrowLeft size={12} aria-hidden="true" /> 返回上篇
+            </button>
+          )}
           {currentFilename && currentFilename !== `${todayKey()}.md` && (
             <button className="flex items-center gap-1 hover:opacity-70" onClick={() => { void switchToDocument(todayKey()); }}>
               <ArrowLeft size={12} /> 回到今天
@@ -756,7 +791,7 @@ export default function App() {
           onConsumedTargetSearchText={() => setTargetSearchText(null)}
           filename={currentFilename}
           notesRevision={tagsRev}
-          onNavigate={(filename, searchText) => { void switchToDocument(filename, searchText); }}
+          onNavigate={(filename, searchText) => { void followNoteLink(filename, searchText); }}
         />
       </div>
       </div>
@@ -903,6 +938,7 @@ export default function App() {
       {/* Export dialog */}
       <RestoreDialog
         open={restoreOpen}
+        prepareRestore={flush}
         onClose={() => setRestoreOpen(false)}
         onRestored={async () => {
           setPendingLink(null);

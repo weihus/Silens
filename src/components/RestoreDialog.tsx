@@ -13,12 +13,13 @@ interface Snapshot {
 interface RestoreDialogProps {
   open: boolean;
   onClose: () => void;
+  prepareRestore: () => Promise<void>;
   onRestored: (id: string) => Promise<void> | void;
   theme: string;
   themeConfig: { bg: string; text: string; muted: string };
 }
 
-export function RestoreDialog({ open, onClose, onRestored, theme, themeConfig }: RestoreDialogProps) {
+export function RestoreDialog({ open, onClose, prepareRestore, onRestored, theme, themeConfig }: RestoreDialogProps) {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -45,11 +46,17 @@ export function RestoreDialog({ open, onClose, onRestored, theme, themeConfig }:
     setBusy(true);
     setError(null);
     try {
+      try {
+        await prepareRestore();
+      } catch {
+        setError('当前编辑尚未保存。请关闭此窗口，处理保存问题后再恢复。');
+        return;
+      }
       await invoke('restore_backup', { id: snapshot.id });
       await onRestored(snapshot.id);
       onClose();
     } catch (cause) {
-      setError(`恢复未完成，笔记保持原样。${String(cause)}`);
+      setError(`恢复未完成。${String(cause)}`);
     } finally {
       setBusy(false);
     }
@@ -90,7 +97,7 @@ export function RestoreDialog({ open, onClose, onRestored, theme, themeConfig }:
             <div className="px-6 py-4 flex flex-col gap-2 max-h-80 overflow-y-auto">
               {loading && <p role="status" className="text-xs py-2" style={{ color: themeConfig.muted }}>正在读取备份…</p>}
               {!loading && !error && snapshots.length === 0 && (
-                <p role="status" className="text-xs py-2" style={{ color: themeConfig.muted }}>还没有备份。先在「本地文件」里点「备份副本」。</p>
+                <p role="status" className="text-xs py-2" style={{ color: themeConfig.muted }}>还没有备份。先在「笔记与备份」里点「备份副本」。</p>
               )}
               {snapshots.map(snapshot => (
                 <div key={snapshot.id} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
@@ -107,7 +114,7 @@ export function RestoreDialog({ open, onClose, onRestored, theme, themeConfig }:
             {pending && (
               <div className="mx-6 mb-4 px-3 py-3 rounded-lg text-xs flex flex-col gap-3"
                 style={{ backgroundColor: night ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)', color: themeConfig.text }}>
-                <p>恢复到 {pending.created}。当前笔记会先备份一份，之后可以同样恢复回来。</p>
+                <p>恢复到 {pending.created}。应用会先保存当前编辑并创建备份，之后可以用这份备份恢复回来。</p>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => { void restore(pending); }} disabled={busy}
                     className="quiet-button rounded-md px-3 py-1.5 disabled:opacity-50">{busy ? '正在恢复…' : '确认恢复'}</button>

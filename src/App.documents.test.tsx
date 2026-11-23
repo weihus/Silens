@@ -144,3 +144,27 @@ it('opens a recently modified article directly from the empty palette', async ()
   fireEvent.click(await screen.findByRole('button', { name: '去年的草稿' }));
   expect(await screen.findByRole('textbox', { name: '篇目标题' })).toHaveValue('去年的草稿');
 });
+
+it('returns from a note link to the source scroll position', async () => {
+  const source = '来源随记';
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command !== 'load_document') return [];
+    const { filename } = args as { filename: string };
+    return filename === 'article-linked.md' ? '# 链接篇目\n\n篇目正文' : source;
+  });
+  render(<App />);
+  const body = await screen.findByRole('textbox', { name: '笔记正文' });
+  await waitFor(() => expect(body).toHaveTextContent(source));
+  const scroller = document.getElementById('silens-scroll-container')!;
+  scroller.scrollTop = 280;
+  act(() => {
+    window.dispatchEvent(new CustomEvent('silens-link-click', { detail: { docName: 'article-linked' } }));
+  });
+  const back = await screen.findByRole('button', { name: '返回上篇' });
+  expect(body).toHaveTextContent('篇目正文');
+  expect(scroller.scrollTop).toBe(0);
+  fireEvent.click(back);
+  await waitFor(() => expect(body).toHaveTextContent(source));
+  expect(scroller.scrollTop).toBe(280);
+  expect(screen.queryByRole('button', { name: '返回上篇' })).toBeNull();
+});

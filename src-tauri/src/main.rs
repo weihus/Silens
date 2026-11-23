@@ -946,6 +946,10 @@ async fn recent_articles(app: tauri::AppHandle) -> Result<Vec<(String, String, S
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
+fn literal_search_pattern(query: &str) -> String {
+    format!("%{}%", query.replace('!', "!!").replace('%', "!%").replace('_', "!_"))
+}
+
 #[tauri::command]
 async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<SearchResult>, String> {
     let query_trim = query.trim();
@@ -958,12 +962,12 @@ async fn search_notes(app: tauri::AppHandle, query: String) -> Result<Vec<Search
     let conn = get_db_connection(&app)?;
 
     // SQLite LIKE 默认对 ASCII 忽略大小写
-    let sql_query = format!("%{}%", query_trim);
+    let sql_query = literal_search_pattern(query_trim);
     
     // 极速匹配：限制最多返回 15 条结果保证渲染性能
     let mut stmt = conn.prepare(
         "SELECT b.id, d.created_date, b.content, d.title, d.kind, d.stem, d.created, d.modified FROM blocks b JOIN documents d ON d.stem = b.date
-         WHERE b.content LIKE ?1 OR d.title LIKE ?1 ORDER BY d.created_date DESC, d.created DESC, b.id ASC LIMIT 15"
+         WHERE b.content LIKE ?1 ESCAPE '!' OR d.title LIKE ?1 ESCAPE '!' ORDER BY d.created_date DESC, d.created DESC, b.id ASC LIMIT 15"
     ).map_err(|e| e.to_string())?;
 
     let rows = stmt.query_map(rusqlite::params![sql_query], |row| {
@@ -1145,6 +1149,12 @@ fn rebuild_workspace_index(conn: &mut rusqlite::Connection, workspace: &Path) ->
 }
 
 fn snapshot_workspace(source: &Path, backups: &Path) -> Result<PathBuf, String> {
+    let published = publish_snapshot(source, backups)?;
+    prune_snapshots(backups);
+    Ok(published)
+}
+
+fn publish_snapshot(source: &Path, backups: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(backups).map_err(|e| e.to_string())?;
     let name = format!("{}_{}", Local::now().format("%Y-%m-%d_%H-%M-%S"), unique_suffix());
     let stage = backups.join(format!(".incomplete-{}", name));
@@ -1153,11 +1163,18 @@ fn snapshot_workspace(source: &Path, backups: &Path) -> Result<PathBuf, String> 
     // Leave a failed stage hidden for inspection; never run retention on failure.
     copy_workspace(source, &stage, false)?;
     fs::rename(&stage, &published).map_err(|e| e.to_string())?;
-    for old in snapshot_dirs(backups)?.into_iter().skip(10) {
+    Ok(published)
+}
+
+fn prune_snapshots(backups: &Path) {
+    let snapshots = match snapshot_dirs(backups) {
+        Ok(snapshots) => snapshots,
+        Err(error) => { log::warn!("Backup retention failed: {}", error); return; }
+    };
+    for old in snapshots.into_iter().skip(10) {
         // A retention failure does not invalidate a successfully published snapshot.
         if let Err(e) = fs::remove_dir_all(&old) { log::warn!("Backup retention failed: {}", e); }
     }
-    Ok(published)
 }
 
 #[derive(Serialize)]
@@ -1207,13 +1224,22 @@ fn restore_snapshot(workspace: &Path, backups: &Path, id: &str) -> Result<(), St
     if snapshot_dirs(backups)?.iter().all(|path| path != &snapshot) {
         return Err("BACKUP_NOT_FOUND: 未找到这份备份".into());
     }
-    snapshot_workspace(workspace, backups)?;
+    let safety_snapshot = publish_snapshot(workspace, backups)?;
+    let safety_id = safety_snapshot.file_name().unwrap_or_default().to_string_lossy();
     note_times::ensure_workspace(&snapshot)?;
     let incoming = workspace_files(&snapshot, false)?;
-    copy_files(&snapshot, workspace, false, true)?;
+    apply_snapshot(workspace, &snapshot, &incoming).map_err(|error| {
+        format!("工作区可能已部分恢复。可在备份列表中选择恢复前的副本 {}。{}", safety_id, error)
+    })?;
+    prune_snapshots(backups);
+    Ok(())
+}
+
+fn apply_snapshot(workspace: &Path, snapshot: &Path, incoming: &[PathBuf]) -> Result<(), String> {
+    copy_files(snapshot, workspace, false, true)?;
     for path in workspace_files(workspace, false)? {
         let relative = path.strip_prefix(workspace).map_err(|e| e.to_string())?;
-        if !incoming.iter().any(|kept| kept.strip_prefix(&snapshot).ok() == Some(relative)) {
+        if !incoming.iter().any(|kept| kept.strip_prefix(snapshot).ok() == Some(relative)) {
             fs::remove_file(&path).map_err(|e| format!("RESTORE_ERROR: {}", e))?;
         }
     }
@@ -1388,6 +1414,60 @@ mod tests {
         assert!(!published.join("note.md.tmp").exists());
         assert!(!backups.0.join("2020-01-01_00-00-00").exists());
         assert!(backups.0.join("2020-01-03_00-00-00").exists());
+    }
+
+    #[test]
+    fn restores_oldest_snapshot_at_retention_limit_and_can_undo() {
+        let workspace = TempDir::new();
+        let backups = TempDir::new();
+        fs::write(workspace.0.join("note.md"), "current").unwrap();
+        for day in 1..=10 {
+            let snapshot = backups.0.join(format!("2020-01-{day:02}_00-00-00"));
+            fs::create_dir(&snapshot).unwrap();
+            fs::write(snapshot.join("note.md"), format!("snapshot {day}")).unwrap();
+        }
+        restore_snapshot(&workspace.0, &backups.0, "2020-01-01_00-00-00").unwrap();
+        assert_eq!(fs::read_to_string(workspace.0.join("note.md")).unwrap(), "snapshot 1");
+        let snapshots = list_snapshots(&backups.0).unwrap();
+        assert_eq!(snapshots.len(), 10);
+        restore_snapshot(&workspace.0, &backups.0, &snapshots[0].id).unwrap();
+        assert_eq!(fs::read_to_string(workspace.0.join("note.md")).unwrap(), "current");
+    }
+
+    #[test]
+    fn failed_restore_reports_the_published_safety_snapshot() {
+        let workspace = TempDir::new();
+        let backups = TempDir::new();
+        fs::write(workspace.0.join("a-note.md"), "current").unwrap();
+        fs::create_dir(workspace.0.join("z-blocked")).unwrap();
+        let snapshot = backups.0.join("2020-01-01_00-00-00");
+        fs::create_dir(&snapshot).unwrap();
+        fs::write(snapshot.join("a-note.md"), "incoming").unwrap();
+        fs::write(snapshot.join("z-blocked"), "cannot replace a directory with a file").unwrap();
+        let error = restore_snapshot(&workspace.0, &backups.0, "2020-01-01_00-00-00").unwrap_err();
+        let safety = &list_snapshots(&backups.0).unwrap()[0].id;
+        assert!(error.contains("可能已部分恢复") && error.contains(safety));
+        assert_eq!(fs::read_to_string(workspace.0.join("a-note.md")).unwrap(), "incoming");
+        assert_eq!(fs::read_to_string(backups.0.join(safety).join("a-note.md")).unwrap(), "current");
+    }
+
+    #[test]
+    fn search_pattern_matches_punctuation_literally() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        for (text, query, expected) in [
+            ("进度 80%", "%", true),
+            ("普通随记", "%", false),
+            ("file_name.md", "_", true),
+            ("filename.md", "_", false),
+            ("Wow!", "!", true),
+        ] {
+            let matched: bool = db.query_row(
+                "SELECT ?1 LIKE ?2 ESCAPE '!'",
+                rusqlite::params![text, literal_search_pattern(query)],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(matched, expected);
+        }
     }
 
     #[test]
