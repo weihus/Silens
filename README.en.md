@@ -13,6 +13,8 @@ Silens is a local-first Markdown writing tool built on [Tauri](https://tauri.app
 
 [Product website source](website/index.html) · [Download Silens](https://github.com/weihus/Silens/releases/latest)
 
+![Silens writing canvas with a daily note on the paper theme](docs/writing-preview.png)
+
 Select text in a daily note and choose “展开为篇目” in the command palette to start a linked titled note. The empty palette also offers the three most recently edited titled notes across the workspace.
 
 ## Current development & releases
@@ -28,21 +30,6 @@ The features below describe the **current development build**. For features avai
 ## About
 
 Notes are stored as plain `.md` files, by default in `Documents/Silens_Notes`. The SQLite index used for search and tags lives in the application's local data directory; private index metadata is not embedded in notes. Everyday writing does not require a cloud service, and there is currently no AI feature silently uploading notes. Sync software you choose may sync the notes folder, and `Documents` itself may be managed by services such as iCloud or OneDrive.
-
-## Roadmap & Progress
-
-- [x] **Gentle interface**: Warm paper, white, and night themes, with system theme and reduced-motion preferences supported.
-- [x] **Editing & autosave**: Save to the current file after 1500ms of idle, including clearing an existing note; refuse overwrites when external changes are detected.
-- [x] **Daily & titled notes**: Start in today's file or create a standalone piece with its own title and stable filename.
-- [x] **Week, month & year recall**: Start with the current month, flip between periods, jump to a date, expand days or months, and restore your browsing position.
-- [x] **Tags, timeline & search**: Review daily-note blocks and whole titled notes through shared creation-date and tag filters, with the selected range retained across views and contextual search previews.
-- [x] **Focus & ambient sound**: Both kinds of writing share typewriter scrolling, a focus timer, and Rain, Fire, and Night soundscapes.
-- [x] **Wiki links**: `[[document]]` completion and `[[file|label]]` aliases, with forward navigation and prefix, substring, and fuzzy matching.
-- [x] **Snapshots & workspace migration**: Publish backups after verification; copy and verify notes during migration while retaining originals.
-- [x] **Backlinks**: A collapsed section below the note shows referring notes and context; click to return to a source. Hidden in focus mode.
-- [x] **Reflection scroll**: A locally generated, deterministic review with date and perspective filters, refreshed excerpts, source navigation, and PNG/JPG letter exports.
-- [x] **Optional AI reflection prose**: Disabled by default; preview the sanitized context and confirm each single request. Generated titles and epilogues appear only in the current scroll and its image export.
-- [ ] **AI-assisted organization**: Future work only; processing or uploading notes must require explicit user opt-in.
 
 ## Tech Stack
 
@@ -61,8 +48,8 @@ The frontend and backend communicate through Tauri IPC:
 - **Markdown editing**: Imported or opened Markdown retains headings and code structure. Typing `# ` does not automatically create a heading. Bold, italic, lists, and `#tags` are supported.
 - **Week, month & year recall**: The sidebar starts with the current month. Choose **周 / 月 / 年 (Week / Month / Year)** and use the arrows to browse adjacent periods, or click the date heading to select a historical period directly. Weeks run Monday through Sunday; months and years cover the full calendar period. Month view groups entries by day and lets you expand busy days. Year view groups entries by month; open a month and return to the year overview with your place preserved. The **日期 (Date)** menu also provides custom ranges and **全部时间 (All dates)**.
 - **Time, tags & titled-note browsing**: Daily notes appear as blocks, and titled notes as titles and summaries. Creation dates determine both grouping and filtering. The selected range persists across time, tag, and titled-note views, and changing periods updates the selected tag's results. **篇目 (Titled notes)** lists titled notes within that range in **Recently modified** order, with creation-date sorting available too; full timestamps remain in tooltips. Closing and reopening the sidebar during the same app session restores the selected period, expansion state, and browsing position.
-- **Search & sidebar controls**: `Cmd/Ctrl + K` searches titles and bodies, with shortcuts for a new titled note, today, yesterday, the current week, month, year, and custom ranges. Context previews appear with results and are hidden on narrow windows. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. A pinned sidebar returns after search closes.
-- **Wiki links & backlinks**: Type `[[` to select a note, use `[[file|label]]` for a display alias, and click a link to open its target. Stable filenames keep links intact when you edit a note's title. When other notes refer to the current document, a collapsed section below the editor shows the number of referring notes. Expand it for source titles and context; click to return to a source and attempt to locate the reference. Each source appears once; self-references and code examples are excluded. Hidden in focus mode. References are read from the current workspace files and refresh on opening, saving, or returning to the app.
+- **Search & sidebar controls**: `Cmd/Ctrl + K` searches titles and bodies. Open “按日期查看” to jump by date or browse a week, month, year, or custom range. Failed searches keep the query available for retry. Context previews appear with results and are hidden on narrow windows. Dismiss the sidebar with its controls, Escape, or a canvas click when unpinned; moving the pointer away leaves it open. A pinned sidebar returns after search closes.
+- **Wiki links & backlinks**: Type `[[` to select a note, use `[[file|label]]` for a display alias, and click a link to open its target. After following a link or backlink, choose “返回上篇” to return to the source note at its previous scroll position. Stable filenames keep links intact when you edit a note's title. When other notes refer to the current document, a collapsed section below the editor shows the number of referring notes. Expand it for source titles and context; click to return to a source and attempt to locate the reference. Each source appears once; self-references and code examples are excluded. Hidden in focus mode. References are read from the current workspace files and refresh on opening, saving, or returning to the app.
 - **Atmosphere & export**: Settings include themes, ambient sound, volume, focus duration, and local file actions. Both kinds of writing support Markdown, plain text (TXT), PNG, and JPG exports, including the title for titled notes.
 
 ### 2. Saving, backups & recovery
