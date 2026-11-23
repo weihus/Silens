@@ -63,7 +63,7 @@ async function ready() {
 async function openFromCommand() {
   fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
   const palette = await screen.findByRole('dialog', { name: '搜索笔记' });
-  fireEvent.click(within(palette).getByRole('button', { name: '时光拾遗（周期回顾）' }));
+  fireEvent.click(within(palette).getByRole('button', { name: '周期回顾' }));
   return screen.findByRole('dialog', { name: '时光拾遗' });
 }
 
@@ -239,5 +239,5 @@ it('hides the scroll and its entries immediately when entering focus mode', asyn
   expect(screen.queryByRole('dialog', { name: '时光拾遗' })).not.toBeInTheDocument();
   fireEvent.keyDown(document.body, { key: 'k', code: 'KeyK', metaKey: true });
   const palette = await screen.findByRole('dialog', { name: '搜索笔记' });
-  expect(within(palette).queryByRole('button', { name: '时光拾遗（周期回顾）' })).not.toBeInTheDocument();
+  expect(within(palette).queryByRole('button', { name: '周期回顾' })).not.toBeInTheDocument();
 });

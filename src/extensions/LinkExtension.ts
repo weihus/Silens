@@ -16,7 +16,14 @@ export const LinkExtension = Extension.create({
         apply: (tr, value) => tr.docChanged ? getLinkDecorations(tr.doc) : value,
       },
       props: {
-        decorations: state => linkKey.getState(state),
+        decorations: state => {
+          const links = linkKey.getState(state);
+          if (!links || !state.selection.empty) return links;
+          const pos = state.selection.from;
+          const editing = links.find(pos, pos, spec => spec.syntax)
+            .filter(range => range.from < pos && pos < range.to);
+          return links.add(state.doc, editing.map(range => Decoration.inline(range.from, range.to, { class: 'silens-link-editing' })));
+        },
         handleClick: (view, pos, event) => {
           const target = event.target instanceof Element
             ? event.target.closest('[data-doc-name].silens-link') : null;
@@ -43,11 +50,21 @@ function getLinkDecorations(doc: Node): DecorationSet {
       const docName = match[1].split('|')[0].trim();
       if (!docName) continue;
       const from = pos + match.index;
-      decos.push(Decoration.inline(from, from + match[0].length, {
+      const end = from + match[0].length;
+      const separator = match[1].indexOf('|');
+      const alias = separator >= 0 ? match[1].slice(separator + 1).trim() : '';
+      const labelStart = alias ? from + 3 + separator : from;
+      const labelEnd = alias ? end - 2 : end;
+      if (alias) {
+        for (const [start, finish] of [[from, labelStart], [labelEnd, end]]) {
+          decos.push(Decoration.inline(start, finish, { class: 'silens-link-syntax' }, { syntax: true }));
+        }
+      }
+      decos.push(Decoration.inline(labelStart, labelEnd, {
         nodeName: 'span',
         class: 'silens-link opacity-70 hover:opacity-100 transition-opacity duration-150 underline decoration-dotted underline-offset-2',
         'data-doc-name': docName,
-        'aria-label': `打开笔记 ${docName}`,
+        'aria-label': `打开笔记 ${alias || docName}`,
         style: 'cursor: pointer;',
       }, { docName }));
     }

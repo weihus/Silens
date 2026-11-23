@@ -51,7 +51,7 @@ async function ready() {
 }
 async function openScroll() {
   fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
-  fireEvent.click(within(screen.getByRole('dialog', { name: '搜索笔记' })).getByRole('button', { name: '时光拾遗（周期回顾）' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: '搜索笔记' })).getByRole('button', { name: '周期回顾' }));
   const trigger = await screen.findByRole('button', { name: '请 AI 为这段时光撰写按语' });
   await waitFor(() => expect(trigger).toBeEnabled());
   return trigger;

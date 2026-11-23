@@ -92,6 +92,7 @@ describe('App overlay interactions', () => {
     const initialLoads = ipc.mock.calls.filter(([command]) => command === 'load_document').length;
     fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
     const search = await screen.findByRole('dialog', { name: '搜索笔记' });
+    fireEvent.click(within(search).getByRole('button', { name: '按日期查看' }));
     fireEvent.click(within(search).getByRole('button', { name: '查看本周' }));
     expect(await screen.findByRole('button', { name: '选择回顾周期' })).toHaveTextContent(periodLabel({ unit: 'week', anchor: today }));
     expect(await screen.findByText('本周开始的篇目')).toBeInTheDocument();
@@ -105,6 +106,7 @@ describe('App overlay interactions', () => {
     await renderReadyApp();
     fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
     const search = await screen.findByRole('dialog', { name: '搜索笔记' });
+    fireEvent.click(within(search).getByRole('button', { name: '按日期查看' }));
     fireEvent.click(within(search).getByText('查看本周'));
 
     expect(await screen.findByText('本周还没有笔记')).toBeInTheDocument();
@@ -125,6 +127,7 @@ describe('App overlay interactions', () => {
     });
     await renderReadyApp();
     fireEvent.click(screen.getByRole('button', { name: '搜索笔记' }));
+    fireEvent.click(await screen.findByRole('button', { name: '按日期查看' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看本月' }));
     fireEvent.click(await screen.findByRole('button', { name: '上一月' }));
     const expected = periodLabel(shiftPeriod({ unit: 'month', anchor: calendarDate(new Date().getTime() / 1000) }, -1));

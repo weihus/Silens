@@ -56,18 +56,20 @@ it('creates an article through the real canvas and flushes title and body before
   expect(screen.getByRole('textbox', { name: '笔记正文' }).textContent).toBe('');
 }, 15000);
 
-it.each([false, true])('expands a journal selection once and preserves its source (write failure: %s)', async fail => {
+it.each(['success', 'creation failure', 'link failure'])('expands a journal selection once and preserves its source (%s)', async scenario => {
   const source = '今天想到一个问题。';
   const writes = new Map<string, string>();
   let attempts = 0;
+  let failLink = scenario === 'link failure';
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     const input = args as { filename: string; currentFilename: string; content: string };
     if (command === 'load_document') return writes.get(input.filename) ?? source;
     if (command === 'save_document') {
       if (input.currentFilename.startsWith('article-')) {
         attempts++;
-        if (fail) throw new Error('目录只读');
+        if (scenario === 'creation failure') throw new Error('目录只读');
       }
+      if (failLink && !input.currentFilename.startsWith('article-')) throw new Error('随记不可写');
       writes.set(input.currentFilename, input.content);
       return input.currentFilename;
     }
@@ -81,17 +83,30 @@ it.each([false, true])('expands a journal selection once and preserves its sourc
   fireEvent.click(screen.getByRole('button', { name: /^搜索笔记$/ }));
   const expand = await screen.findByRole('button', { name: '展开为篇目' });
   act(() => { expand.click(); expand.click(); });
-  if (fail) {
+  if (scenario === 'creation failure') {
     expect(await screen.findByRole('alert')).toHaveTextContent('目录只读');
     expect(writes.size).toBe(0);
     expect(body).toHaveTextContent(source);
   } else {
+    if (scenario === 'link failure') {
+      const open = await screen.findByRole('button', { name: '打开已创建的篇目' });
+      await waitFor(() => expect(open).toBeEnabled());
+      expect(body.textContent).toBe(source);
+      fireEvent.click(open);
+      expect(await screen.findByRole('textbox', { name: '篇目标题' })).toHaveValue('');
+      expect(body.textContent).toBe('想到');
+      expect(writes.size).toBe(1);
+      failLink = false;
+      const retry = screen.getByRole('button', { name: '重试保存原文链接' });
+      act(() => { retry.click(); retry.click(); });
+      await waitFor(() => expect(screen.queryByRole('button', { name: '重试保存原文链接' })).toBeNull());
+    }
     await screen.findByRole('textbox', { name: '篇目标题' });
     const article = [...writes].find(([filename]) => filename.startsWith('article-'))!;
     expect(article[1]).toBe('# \n\n想到');
     const journal = [...writes].find(([filename]) => !filename.startsWith('article-'))!;
     expect(journal[1]).toContain(source);
-    expect(journal[1]).toContain(`[[${article[0].slice(0, -3)}|展开的篇目]]`);
+    expect(journal[1]).toBe(`${source}\n\n[[${article[0].slice(0, -3)}|想到]]`);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '回到今天' }));
     await waitFor(() => expect(body.querySelector('[data-doc-name]')).toHaveAttribute('data-doc-name', article[0].slice(0, -3)));
@@ -126,6 +141,6 @@ it('opens a recently modified article directly from the empty palette', async ()
   render(<App />);
   await screen.findByRole('textbox', { name: '笔记正文' });
   fireEvent.click(screen.getByRole('button', { name: /^搜索笔记$/ }));
-  fireEvent.click(await screen.findByRole('button', { name: '继续写作 · 去年的草稿' }));
+  fireEvent.click(await screen.findByRole('button', { name: '去年的草稿' }));
   expect(await screen.findByRole('textbox', { name: '篇目标题' })).toHaveValue('去年的草稿');
 });

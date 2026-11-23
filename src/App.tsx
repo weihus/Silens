@@ -24,7 +24,7 @@ import { useAtmospherePanel } from './hooks/useAtmospherePanel';
 import { useAudio } from './hooks/useAudio';
 import { useThemeCSS } from './hooks/useThemeCSS';
 import { decodeEmptyLines } from './utils/emptyLines';
-import { displayTitle, documentKind, parseDocument, serializeDocument } from './utils/documents';
+import { displayTitle, firstSentence, documentKind, parseDocument, serializeDocument } from './utils/documents';
 import type { RecallDay, RecallRange } from './types';
 import { periodLabel, periodRange, type RecallPeriod } from './utils/recall';
 import { SlidersHorizontal, Columns, Search, ArrowLeft } from 'lucide-react';
@@ -114,13 +114,16 @@ export default function App() {
     if (!paletteOpen) return;
     let active = true;
     setRecent([]);
-    void invoke<[string, string][]>('recent_articles').then(rows => {
-      if (active) setRecent(rows ?? []);
+    void invoke<[string, string, string][]>('recent_articles').then(rows => {
+      if (active) setRecent((rows ?? []).map(([filename, title, body]) => [filename, displayTitle(filename, title || firstSentence(body ?? ''))]));
     }).catch(() => {});
     return () => { active = false; };
   }, [paletteOpen]);
 
   const [storageError, setStorageError] = useState<string | { message: string; label: string; retry: () => void } | null>(null);
+  const [pendingLink, setPendingLink] = useState<{
+    source: string; article: string; original: string; linked: string; link: string;
+  } | null>(null);
   const expanding = useRef(false);
   const closing = useRef(false);
   const [tagsRev, setTagsRev] = useState(0);
@@ -209,6 +212,21 @@ export default function App() {
   }, []);
   const { text, title, filename: currentFilename, loading, status: saveStatus, error: saveError, notice,
     change: changeText, changeTitle, getContent, open: openDocument, flush, retryDocument } = useDocumentSession(editor, onSaved);
+
+  const [showSaved, setShowSaved] = useState(false);
+  const previousSave = useRef({ filename: currentFilename, status: saveStatus });
+  useEffect(() => {
+    const previous = previousSave.current;
+    previousSave.current = { filename: currentFilename, status: saveStatus };
+    if (saveStatus !== 'saved' || previous.filename !== currentFilename || previous.status === 'saved') {
+      setShowSaved(false);
+      return;
+    }
+    setShowSaved(true);
+    const timeout = window.setTimeout(() => setShowSaved(false), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [currentFilename, saveStatus]);
+  const saveLabel = { saving: '保存中', pending: '待保存', error: '尚未保存', saved: '已保存' }[saveStatus];
 
   const closeReflection = useCallback((reason: 'dismiss' | 'navigate' | 'write' = 'dismiss', force = false) => {
     if (!reflectionState.current.active || (reflectionState.current.exporting && !force)) return;
@@ -452,33 +470,63 @@ export default function App() {
     if (!sidebarPinned) setSidebarOpen(false);
   }, [storageBusy, loading, openDocument, setPaletteOpen, sidebarPinned, setSidebarOpen]);
 
+  async function saveSourceLink(pending: NonNullable<typeof pendingLink>) {
+    await flush();
+    const disk = await invoke<string>('load_document', { filename: pending.source });
+    if (!disk.includes(pending.link)) {
+      if (disk !== pending.original) throw new Error('随记内容已改变，请检查原文后手动插入链接。');
+      await invoke('save_document', { currentFilename: pending.source, expectedContent: disk, content: pending.linked });
+    }
+    if (currentFilename === pending.source) await openDocument(pending.source, false, 'reload');
+    setPendingLink(null);
+    setTagsRev(n => n + 1);
+  }
+
+  async function retrySourceLink() {
+    if (!pendingLink || expanding.current || storageBusy || loading) return;
+    expanding.current = true;
+    setStorageBusy(true);
+    try {
+      await saveSourceLink(pendingLink);
+      setStorageError(null);
+      setToast('原文链接已保存');
+    } catch (cause) {
+      setStorageError(String(cause));
+    } finally {
+      expanding.current = false;
+      setStorageBusy(false);
+    }
+  }
+
   async function expandSelection() {
-    if (!editor || article || loading || storageBusy || updateBusy || expanding.current || reflectionState.current.active) return;
+    if (!editor || !currentFilename || pendingLink || article || loading || storageBusy || updateBusy || expanding.current || reflectionState.current.active) return;
     const { doc, selection } = editor.state;
-    if (selection.empty || !doc.textBetween(selection.from, selection.to).trim()) return;
+    const selected = doc.textBetween(selection.from, selection.to, '\n');
+    if (selection.empty || !selected.trim()) return;
     const stem = `article-${crypto.randomUUID()}`;
     const filename = `${stem}.md`;
     expanding.current = true;
     setStorageBusy(true);
     setPaletteOpen(false);
-    let created = false;
     try {
       const { markdown } = editor.storage as typeof editor.storage & {
-        markdown: { serializer: { serialize(content: Fragment): string }; getMarkdown(): string };
+        markdown: { serializer: { serialize(content: Fragment): string } };
       };
       const body = decodeEmptyLines(markdown.serializer.serialize(selection.content().content));
+      const alias = firstSentence(selected).replace(/[\[\]|<>\\*`_~]/g, '').trim() || '展开的篇目';
+      const link = `[[${stem}|${alias}]]`;
+      const end = selection.$to.depth ? selection.$to.after(1) : selection.to;
+      const linkedDoc = editor.state.tr.insert(end, editor.schema.nodes.paragraph.create(null, editor.schema.text(link))).doc;
+      const pending = { source: currentFilename, article: filename, original: getContent(), link,
+        linked: decodeEmptyLines(markdown.serializer.serialize(linkedDoc.content)) };
       await flush();
       await invoke('save_document', { currentFilename: filename, expectedContent: null, content: serializeDocument('article', '', body) });
-      created = true;
-      if (editor.state.doc !== doc) throw new Error('原文已发生变化');
-      const end = selection.$to.depth ? selection.$to.after(1) : selection.to;
-      const link = editor.schema.nodes.paragraph.create(null, editor.schema.text(`[[${stem}|展开的篇目]]`));
-      editor.view.dispatch(editor.state.tr.insert(end, link));
-      changeText(markdown.getMarkdown());
-      await flush();
+      setPendingLink(pending);
+      await saveSourceLink(pending);
+      setStorageError(null);
       await openDocument(filename);
     } catch (cause) {
-      setStorageError(created ? '篇目已创建，可从搜索面板继续写作。请检查随记中的链接与保存状态。' : `未能展开为篇目：${String(cause)}`);
+      setStorageError(String(cause));
     } finally {
       expanding.current = false;
       setStorageBusy(false);
@@ -633,12 +681,16 @@ export default function App() {
         style={{ visibility: reflectionActive ? 'hidden' : undefined }}
       >
         <div
-          className="chrome-fade select-none flex items-center text-[11px] tracking-[0.06em]"
-          data-visible={isIdle}
+          className="chrome-fade relative select-none flex items-center text-[11px] tracking-[0.06em]"
+          data-visible={isIdle || saveStatus !== 'saved' || showSaved}
           style={{ color: themeConfig.muted }}
         >
           <span>{charCount} 字</span>
-          <span className="ml-3" aria-live="polite">{saveStatus === 'saving' ? '保存中' : saveStatus === 'pending' ? '待保存' : saveStatus === 'error' ? '尚未保存' : '本地保存'}</span>
+          <span className="absolute left-full ml-3 whitespace-nowrap" aria-live="polite">
+            {(saveStatus !== 'saved' || showSaved) && (
+              <span className={saveStatus === 'saved' ? 'save-confirmation' : undefined}>{saveLabel}</span>
+            )}
+          </span>
         </div>
       </div>
 
@@ -664,18 +716,8 @@ export default function App() {
         >
           <Columns size={16} strokeWidth={1.5} />
         </button>
-        <div
-          className="select-none font-medium"
-          style={{
-            color: themeConfig.muted,
-            fontSize: '11px',
-            letterSpacing: '0.22em',
-          }}
-        >
-          SILENS
-        </div>
-        <div className="mt-2 flex items-center gap-3 text-xs" style={{ color: themeConfig.muted }}>
-          <span className="max-w-[45vw] truncate">{currentTitle}</span>
+        <div className="flex min-h-5 items-center gap-3 text-xs" style={{ color: themeConfig.muted }}>
+          {!article && <span className="max-w-[45vw] truncate">{currentFilename ? currentTitle : loading ? currentTitle : 'SILENS'}</span>}
           {currentFilename && currentFilename !== `${todayKey()}.md` && (
             <button className="flex items-center gap-1 hover:opacity-70" onClick={() => { void switchToDocument(todayKey()); }}>
               <ArrowLeft size={12} /> 回到今天
@@ -748,12 +790,14 @@ export default function App() {
         editor={editor}
         currentFilename={currentFilename}
         recent={recent}
-        onExpandSelection={paletteOpen && !article && editor?.state?.selection?.empty === false && editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to).trim() ? expandSelection : undefined}
+        onExpandSelection={paletteOpen && !pendingLink && !article && editor?.state?.selection?.empty === false && editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to).trim() ? expandSelection : undefined}
         onExport={() => setExportOpen(true)}
         onTagManaged={() => setTagsRev(n => n + 1)}
         onNewArticle={() => { void createArticle(); }}
         onOpenReflection={isFocusMode ? undefined : () => openReflection({ kind: 'all' })}
-        onToday={async () => { if ((await switchToDocument(todayKey())).date) setPaletteOpen(false); }}
+        onToday={currentFilename && currentFilename !== `${todayKey()}.md` ? async () => {
+          if ((await switchToDocument(todayKey())).date) setPaletteOpen(false);
+        } : undefined}
         onSelectResult={async (date, searchText) => !!(await switchToDocument(date, searchText)).date}
         onQuickJump={async (preset, customRange) => {
           setPaletteOpen(false);
@@ -840,6 +884,7 @@ export default function App() {
           const selected = await openFolderDialog({ directory: true, multiple: false, title: '选择笔记文件夹的位置' });
           if (typeof selected !== 'string') return;
           await invoke('change_storage_path', { newPath: selected });
+          setPendingLink(null);
           await openDocument(currentFilename ?? `${todayKey()}.md`, true, 'reload');
           setTagsRev(n => n + 1);
           setToast('笔记已迁移，原文件仍保留');
@@ -860,6 +905,7 @@ export default function App() {
         open={restoreOpen}
         onClose={() => setRestoreOpen(false)}
         onRestored={async () => {
+          setPendingLink(null);
           await openDocument(currentFilename ?? `${todayKey()}.md`, true, 'reload');
           setTagsRev(n => n + 1);
           setToast('已恢复备份');
@@ -878,16 +924,25 @@ export default function App() {
         title={article ? title : undefined}
       />
 
-      {!dialogOpen && (saveError || storageError) && (
+      {!dialogOpen && (saveError || storageError || pendingLink) && (
         <div role="alert" className="fixed bottom-16 left-1/2 z-[10000] w-[min(90vw,520px)] -translate-x-1/2 rounded-xl border p-4 text-sm shadow-sm"
           style={{ background: themeConfig.bg, color: themeConfig.text, borderColor: 'var(--theme-muted)' }}>
+          {pendingLink && <div>
+            <p>篇目已创建，随记中的链接尚待保存。</p>
+            <code className="block break-all select-all text-xs my-2">{pendingLink.link}</code>
+            <div className="flex flex-wrap gap-4">
+              <button disabled={storageBusy || loading} onClick={() => { void retrySourceLink(); }}>重试保存原文链接</button>
+              {currentFilename !== pendingLink.article && <button disabled={storageBusy || loading} onClick={() => { void openDocument(pendingLink.article); }}>打开已创建的篇目</button>}
+              <button disabled={storageBusy || loading} onClick={() => { setPendingLink(null); setStorageError(null); }}>跳过链接</button>
+            </div>
+          </div>}
           <p>{saveError || (typeof storageError === 'string' ? storageError : storageError?.message)}</p>
           <div className="mt-3 flex gap-4">
             {saveError && <button onClick={() => { void retryDocument().catch(() => {}); }}>{saveStatus === 'error' ? '重试保存' : '重新读取'}</button>}
             {saveError && <button onClick={() => setExportOpen(true)}>导出当前文字</button>}
             {!saveError && storageError && typeof storageError !== 'string' && <button onClick={storageError.retry}>{storageError.label}</button>}
             {saveStatus === 'error' && currentFilename && <button onClick={() => { void openDocument(currentFilename, true, 'preserve'); }}>保留副本并重新读取</button>}
-            {storageError && !saveError && <button onClick={() => setStorageError(null)}>收起</button>}
+            {storageError && !saveError && !pendingLink && <button onClick={() => setStorageError(null)}>收起</button>}
           </div>
         </div>
       )}

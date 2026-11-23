@@ -929,15 +929,20 @@ pub struct SearchResult {
 }
 
 #[tauri::command]
-async fn recent_articles(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
+async fn recent_articles(app: tauri::AppHandle) -> Result<Vec<(String, String, String)>, String> {
     let state = app.state::<StorageLock>();
     let _guard = state.0.lock().map_err(|_| "STORAGE_LOCK_ERROR")?;
     let conn = get_db_connection(&app)?;
     let mut statement = conn.prepare(
-        "SELECT stem || '.md', title FROM documents WHERE kind = 'article' ORDER BY modified DESC, stem LIMIT 3"
+        "SELECT d.stem || '.md', b.raw_markdown FROM documents d
+         JOIN blocks b ON b.date = d.stem AND b.source_ordinal = 0
+         WHERE d.kind = 'article' ORDER BY d.modified DESC, d.stem LIMIT 3"
     ).map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| {
+        let raw: String = row.get(1)?;
+        let (title, body) = documents::split(&raw);
+        Ok((row.get(0)?, title.unwrap_or_default(), body.trim_start().chars().take(512).collect()))
+    }).map_err(|e| e.to_string())?;
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 

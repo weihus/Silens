@@ -3,7 +3,7 @@ import { AISettingsSection } from './AISettingsSection';
 import type { AiEndpointConfig } from '../utils/reflectionAI';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import type { Theme, AtmosphereState } from '../types';
-import { VolumeX, Moon, CloudRain, Flame, Monitor, Download, X } from 'lucide-react';
+import { VolumeX, Moon, CloudRain, Flame, Monitor, X } from 'lucide-react';
 
 interface AtmospherePanelProps {
   open: boolean;
@@ -102,10 +102,13 @@ export function AtmospherePanel({
           ))}
         </div>
       </div>
-      <button type="button" disabled={actionsDisabled} onClick={onExport} className="quiet-button flex items-center gap-2 py-2 px-2 rounded-md text-xs self-start"><Download size={14} aria-hidden="true" />导出</button>
       <details className="border-t pt-4 text-xs" style={{ borderColor: 'var(--theme-border)', color: themeConfig.muted }}>
         <summary className="cursor-pointer py-1">笔记与备份</summary>
         <div className="flex flex-col gap-1 mt-3" aria-busy={storageBusy}>
+          <button type="button" disabled={actionsDisabled} onClick={onExport}
+            className="quiet-button rounded-md px-2 py-2 text-left disabled:opacity-50 disabled:cursor-not-allowed">
+            导出当前笔记
+          </button>
           {[
             { label: '打开笔记文件夹', action: onOpenStorage },
             { label: '备份副本', action: onBackup },

@@ -13,6 +13,8 @@ it('keeps an alias linked to its stable filename and ignores code examples', () 
   });
   const links = editor.view.dom.querySelectorAll('.silens-link');
   expect(links).toHaveLength(1);
+  expect(links[0].textContent).toBe('一个问题');
+  expect(editor.view.dom.querySelector('.silens-link-syntax')?.textContent).toBe('[[article-123|');
   expect(links[0].getAttribute('data-doc-name')).toBe('article-123');
 });
 

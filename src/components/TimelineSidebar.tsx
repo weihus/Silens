@@ -5,7 +5,7 @@ import type { Document, RecallDay, RecallRange, ReflectionPerspective } from '..
 import { documentDate, withinRange, type RecallPeriod } from '../utils/recall';
 import { RecallPeriodNavigation } from './RecallPeriodNavigation';
 import { ArticleCard, RecallTimeline } from './RecallTimeline';
-import { displayTitle, documentKind, parseDocument } from '../utils/documents';
+import { displayTitle, firstSentence, documentKind, parseDocument } from '../utils/documents';
 import { extractTagsFromText } from '../utils/tags';
 import { invoke } from '@tauri-apps/api/core';
 import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSegmentDateInput';
@@ -619,7 +619,7 @@ export const TimelineSidebar: React.FC<{
                               }
                             }}
                             disabled={!startHasAny && !endHasAny}
-                            className="block w-full text-left px-2.5 py-1 text-xs font-mono whitespace-nowrap opacity-80 hover:opacity-100 disabled:opacity-20 transition-opacity"
+                            className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md disabled:opacity-50"
                             style={{ color: 'var(--theme-text)' }}
                           >
                             查看
@@ -633,7 +633,7 @@ export const TimelineSidebar: React.FC<{
                               onJumpTime?.('this-week');
                               setShowJumpPopover(false);
                             }}
-                            className="block w-full text-left px-2.5 py-1 text-xs font-mono whitespace-nowrap opacity-60 hover:opacity-100 transition-opacity"
+                            className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md"
                             style={{ color: 'var(--theme-text)' }}
                           >
                             本周
@@ -644,19 +644,19 @@ export const TimelineSidebar: React.FC<{
                               onJumpTime?.('this-month');
                               setShowJumpPopover(false);
                             }}
-                            className="block w-full text-left px-2.5 py-1 text-xs font-mono whitespace-nowrap opacity-60 hover:opacity-100 transition-opacity"
+                            className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md"
                             style={{ color: 'var(--theme-text)' }}
                           >
                             本月
                           </button>
-                          <button type="button" onClick={() => { onJumpTime?.('this-year'); setShowJumpPopover(false); }} className="block w-full text-left px-2.5 py-1 text-xs font-mono opacity-60 hover:opacity-100">本年</button>
-                          <button type="button" onClick={() => { onClearRange?.(); setShowJumpPopover(false); setReturnYear(null); }} className="block w-full text-left px-2.5 py-1 text-xs font-mono opacity-60 hover:opacity-100">全部时间</button>
+                          <button type="button" onClick={() => { onJumpTime?.('this-year'); setShowJumpPopover(false); }} className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md">本年</button>
+                          <button type="button" onClick={() => { onClearRange?.(); setShowJumpPopover(false); setReturnYear(null); }} className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md">全部时间</button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               enterCustomJumpMode();
                             }}
-                            className="block w-full text-left px-2.5 py-1 text-xs font-mono whitespace-nowrap opacity-60 hover:opacity-100 transition-opacity"
+                            className="block w-full text-left px-2.5 py-1 text-[13px] quiet-button rounded-md"
                             style={{ color: 'var(--theme-text)' }}
                           >
                             自定
@@ -708,9 +708,10 @@ export const TimelineSidebar: React.FC<{
                         ? <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onClearRange}>查看全部篇目</button>
                         : onNewArticle && <button className="quiet-button mt-4 rounded px-2 py-1" onClick={onNewArticle}>新建第一篇</button>}
                     </div> : visibleArticles.map(doc => {
-                      const tags = doc.tags ?? extractTagsFromText(parseDocument(doc.filename, doc.content).body);
+                      const { title, body } = parseDocument(doc.filename, doc.content);
+                      const tags = doc.tags ?? extractTagsFromText(body);
                       return <ArticleCard key={doc.filename} current={currentFilename === doc.filename}
-                        article={{ filename: doc.filename, title: displayTitle(doc.filename, parseDocument(doc.filename, doc.content).title), content: parseDocument(doc.filename, doc.content).body, created: doc.created, created_date: documentDate(doc), modified: doc.modified, tags, is_untagged: tags.length === 0 }}
+                        article={{ filename: doc.filename, title: displayTitle(doc.filename, title || firstSentence(body)), content: body, created: doc.created, created_date: documentDate(doc), modified: doc.modified, tags, is_untagged: tags.length === 0 }}
                         onOpen={onDateClick} onTag={selectTag} dateMode={articleSort} />;
                     })}
                   </motion.div>
@@ -770,11 +771,11 @@ export const TimelineSidebar: React.FC<{
                         <button
                           key={perspective.kind === 'untagged' ? 'untagged' : `tag:${perspective.tag}`}
                           onClick={() => selectTag(perspective.kind === 'tag' ? perspective.tag : '默认', perspective.kind === 'untagged')}
-                          className="group flex items-center justify-between w-full py-3.5 border-b transition-colors hover:bg-black/5 dark:hover:bg-white/5 px-3 -mx-3 rounded-xl"
+                          className="flex items-baseline justify-between gap-4 w-full py-3.5 border-b transition-colors hover:bg-black/5 dark:hover:bg-white/5 px-3 -mx-3 rounded-xl"
                           style={{ borderColor: 'rgba(150, 150, 150, 0.06)' }}
                         >
-                          <span className="text-[13px] tracking-widest transition-opacity opacity-80 group-hover:opacity-100" style={{ color: 'var(--theme-text)' }}>{label}</span>
-                          <span className="text-xs font-mono opacity-30 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--theme-muted)' }}>{count}</span>
+                          <span className="min-w-0 break-words text-left text-[13px]" style={{ color: 'var(--theme-text)' }}>{label}</span>
+                          <span className="shrink-0 text-right text-xs tabular-nums" style={{ color: 'var(--theme-muted)' }}>{count}</span>
                         </button>
                       ))}
                       {tagFrequencies.length === 0 && (

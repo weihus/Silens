@@ -55,13 +55,16 @@ it('shows time quick actions without an empty preview and preserves keyboard nav
   const close = vi.fn();
   render(<CommandPalette open onOpenChange={close} onQuickJump={jump} />);
   expect(screen.queryByRole('region', { name: '笔记预览' })).toBeNull();
-  expect(screen.getAllByText('写作与回顾')).toHaveLength(1);
+  const input = screen.getByRole('textbox');
+  expect(screen.getAllByRole('button')).toHaveLength(1);
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(screen.getByRole('button', { name: '按日期查看', expanded: true })).toBeTruthy();
   expect(screen.queryByText('时光穿梭')).toBeNull();
-  expect(screen.getAllByRole('button')).toHaveLength(5);
+  expect(screen.getAllByRole('button')).toHaveLength(6);
   for (const label of ['跳转到昨天', '查看本周', '查看本月', '查看本年', '自定义日期...']) {
     expect(screen.getByRole('button', { name: label })).toBeTruthy();
   }
-  const input = screen.getByRole('textbox');
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(jump).toHaveBeenCalledWith('this-week');
@@ -77,6 +80,7 @@ it.each([
   const jump = vi.fn();
   const close = vi.fn();
   render(<CommandPalette open onOpenChange={close} onQuickJump={jump} />);
+  fireEvent.click(screen.getByRole('button', { name: '按日期查看' }));
   fireEvent.click(screen.getByRole('button', { name: label }));
   expect(jump).toHaveBeenCalledWith(preset);
   expect(close).toHaveBeenCalledWith(false);
@@ -118,6 +122,7 @@ it('closes from a date field with Escape and never schedules a submitted close',
   const close = vi.fn();
   const jump = vi.fn();
   render(<CommandPalette open onOpenChange={close} onQuickJump={jump} />);
+  fireEvent.click(screen.getByRole('button', { name: '按日期查看' }));
   fireEvent.click(screen.getByText('自定义日期...'));
   const inputs = screen.getAllByRole('textbox');
   inputs[1].focus();
@@ -285,11 +290,14 @@ it('keeps the dialog open and the notes untouched when restoring fails', async (
   expect(close).not.toHaveBeenCalled();
 });
 
-it('offers restoring a backup from the local files section', () => {
+it('offers export and restore from the local files section', () => {
   const restore = vi.fn();
+  const exportNote = vi.fn();
   const ref = createRef<HTMLDivElement>();
-  render(<AtmospherePanel open ref={ref} panelBtnRef={createRef<HTMLButtonElement>()} onToggle={vi.fn()} onExport={vi.fn()} storageBusy={false} atmosphere={{ theme: 'paper', sound: 'none', volume: 0.5, autoSync: false }} onChange={vi.fn()} themeConfig={themeConfig} activeTheme="paper" focusDuration={25} onFocusDurationChange={vi.fn()} onRestore={restore} />);
+  render(<AtmospherePanel open ref={ref} panelBtnRef={createRef<HTMLButtonElement>()} onToggle={vi.fn()} onExport={exportNote} storageBusy={false} atmosphere={{ theme: 'paper', sound: 'none', volume: 0.5, autoSync: false }} onChange={vi.fn()} themeConfig={themeConfig} activeTheme="paper" focusDuration={25} onFocusDurationChange={vi.fn()} onRestore={restore} />);
   fireEvent.click(screen.getByText('笔记与备份'));
+  fireEvent.click(screen.getByRole('button', { name: '导出当前笔记' }));
+  expect(exportNote).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole('button', { name: '恢复备份' }));
   expect(restore).toHaveBeenCalledOnce();
   expect(screen.queryByText(/请手动复制文件/)).toBeNull();

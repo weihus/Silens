@@ -78,6 +78,14 @@
   opacity: 0;
   transition-duration: 180ms;
 }
+@media (prefers-reduced-motion: no-preference) {
+  .save-confirmation {
+    animation: save-confirmation-fade 180ms ease-out 1620ms forwards;
+  }
+}
+@keyframes save-confirmation-fade {
+  to { opacity: 0; }
+}
 .chrome-fade:focus-within { opacity: 1; }
 .chrome-control {
   border-radius: 8px;
@@ -286,3 +294,7 @@ input[type='range']::-moz-range-thumb {
   cursor: pointer;
 }
 
+
+/* Keep the stable target editable while displaying the wiki alias in prose. */
+.silens-link-syntax { font-size: 0; }
+.ProseMirror-focused .silens-link-syntax.silens-link-editing { font-size: inherit; }

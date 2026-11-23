@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDialogFocus } from '../hooks/useDialogFocus';
-import { Search } from 'lucide-react';
+import { ChevronRight, Search } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ThreeSegmentDateInput, type PartialDate, toPartialKey } from './ThreeSegmentDateInput';
 
@@ -65,6 +65,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [showQuickSelection, setShowQuickSelection] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [navigationFailed, setNavigationFailed] = useState(false);
   const selectResult = useCallback((result: SearchResult, searchText: string) => {
@@ -80,6 +81,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     else finish(opened);
   }, [onSelectResult, onOpenChange]);
   // 自定义日期零状态（PartialDate：年/月/日 独立可编辑，任意部分有值即可提交）
+  const [datesExpanded, setDatesExpanded] = useState(false);
   const [customMode, setCustomMode] = useState(false);
   const [customStart, setCustomStart] = useState<PartialDate>({});
   const [customEnd, setCustomEnd] = useState<PartialDate>({});
@@ -94,36 +96,48 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const dialogRef = useDialogFocus(open, () => onOpenChange(false), inputRef);
 
   // 零状态：时光穿梭快捷选项（查询为空时渲染，键盘可导航，回车触发）
-  const QUICK_JUMP_ACTIONS: { id: string; label: string; action: () => void | Promise<void> }[] = [
+  const QUICK_JUMP_ACTIONS: { id: string; label: string; recent?: boolean; dateOption?: boolean; action: () => void | Promise<void> }[] = [
     ...(onExpandSelection ? [{ id: 'expand', label: '展开为篇目', action: onExpandSelection }] : []),
-    ...(onNewArticle ? [{ id: 'new-article', label: '新建篇目', action: onNewArticle }] : []),
     ...recent.map(([filename, title]) => ({
-      id: filename, label: `继续写作 · ${title || '未命名笔记'}`, action: async () => {
+      id: filename, recent: true, label: title || '未命名笔记', action: async () => {
         if (await onSelectResult?.(filename, '') === false) setNavigationFailed(true);
         else onOpenChange(false);
       },
     })),
+    ...(onNewArticle ? [{ id: 'new-article', label: '新建篇目', action: onNewArticle }] : []),
     ...(onExport ? [{ id: 'export', label: '导出当前笔记', action: onExport }] : []),
-    ...(onOpenReflection ? [{ id: 'reflection', label: '时光拾遗（周期回顾）', action: onOpenReflection }] : []),
+    ...(onOpenReflection ? [{ id: 'reflection', label: '周期回顾', action: onOpenReflection }] : []),
     ...(onToday ? [{ id: 'today', label: '回到今天', action: onToday }] : []),
-    { id: 'yesterday', label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
-    { id: 'this-week', label: '查看本周', action: () => onQuickJump?.('this-week') },
-    { id: 'this-month', label: '查看本月', action: () => onQuickJump?.('this-month') },
-    { id: 'this-year', label: '查看本年', action: () => onQuickJump?.('this-year') },
-    {
-      id: 'custom-range',
-      label: '自定义日期...',
-      action: () => {
-        // 起/止默认今天，用户只改要改的那一段
-        const now = new Date();
-        const today: PartialDate = { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
-        setCustomStart({ ...today });
-        setCustomEnd({ ...today });
-        setCustomMode(true);
+    ...(onQuickJump ? [{
+      id: 'dates',
+      label: '按日期查看',
+      action: () => setDatesExpanded(!datesExpanded),
+    }] : []),
+    ...(datesExpanded && onQuickJump ? [
+      { id: 'yesterday', dateOption: true, label: '跳转到昨天', action: () => onQuickJump?.('yesterday') },
+      { id: 'this-week', dateOption: true, label: '查看本周', action: () => onQuickJump?.('this-week') },
+      { id: 'this-month', dateOption: true, label: '查看本月', action: () => onQuickJump?.('this-month') },
+      { id: 'this-year', dateOption: true, label: '查看本年', action: () => onQuickJump?.('this-year') },
+      {
+        id: 'custom-range', dateOption: true,
+        label: '自定义日期...',
+        action: () => {
+          // 起/止默认今天，用户只改要改的那一段
+          const now = new Date();
+          const today: PartialDate = { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+          setCustomStart({ ...today });
+          setCustomEnd({ ...today });
+          setCustomMode(true);
+        },
       },
-    },
+    ] : []),
   ];
   const runQuickAction = (item: typeof QUICK_JUMP_ACTIONS[number]) => {
+    setNavigationFailed(false);
+    if (item.id === 'dates') {
+      setSelectedIndex(QUICK_JUMP_ACTIONS.indexOf(item));
+      inputRef.current?.focus();
+    }
     const action = item.action();
     if (action instanceof Promise) void action.catch(() => setNavigationFailed(true));
     if (['yesterday', 'this-week', 'this-month', 'this-year'].includes(item.id)) {
@@ -139,6 +153,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       setQuery('');
       setResults([]);
       setSelectedIndex(0);
+      setShowQuickSelection(false);
+      setDatesExpanded(false);
       setCustomMode(false);
       setCustomStart({});
       setCustomEnd({});
@@ -184,9 +200,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (QUICK_JUMP_ACTIONS.length > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
+          setShowQuickSelection(true);
           setSelectedIndex((prev) => (prev + 1) % QUICK_JUMP_ACTIONS.length);
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
+          setShowQuickSelection(true);
           setSelectedIndex((prev) => (prev - 1 + QUICK_JUMP_ACTIONS.length) % QUICK_JUMP_ACTIONS.length);
         } else if (e.key === 'Enter') {
           e.preventDefault();
@@ -217,12 +235,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // 4. 列表滚动跟随 (Scroll into view)
   useEffect(() => {
     if (listRef.current && (results.length > 0 || !query.trim())) {
-      const activeEl = listRef.current.children[selectedIndex] as HTMLElement;
+      const activeEl = listRef.current.querySelectorAll('button')[selectedIndex];
       if (activeEl) {
         activeEl.scrollIntoView({ block: 'nearest' });
       }
     }
-  }, [selectedIndex, results, query]);
+  }, [selectedIndex, results, query, datesExpanded]);
 
   const selectedResult = results[selectedIndex] ?? null;
 
@@ -265,10 +283,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   ref={inputRef}
                   type="text"
                   value={query}
-                  onChange={(e) => { setQuery(e.target.value); setResults([]); setSelectedIndex(0); }}
+                  onChange={(e) => { setQuery(e.target.value); setResults([]); setSelectedIndex(0); setShowQuickSelection(false); }}
                   onKeyDown={handleKeyDown}
-                  placeholder="搜索笔记与灵感..."
-                  className="w-full h-[60px] text-[15px] bg-transparent border-none focus:outline-none focus:ring-0 text-inherit placeholder:text-current placeholder:opacity-40"
+                  placeholder="搜索笔记"
+                  className="w-full h-[60px] text-[15px] bg-transparent border-none focus:outline-none focus:ring-0 text-inherit placeholder:text-current placeholder:opacity-65"
                   spellCheck={false}
                 />
               </div>
@@ -332,19 +350,26 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </div>
                 ) : (
                   <div className="p-2">
-                    <div className="px-3 pt-2 pb-1 text-[11px] opacity-45">写作与回顾</div>
                     <div ref={listRef} className="flex max-h-[55vh] flex-col overflow-y-auto">
                       {QUICK_JUMP_ACTIONS.map((item, idx) => (
-                        <button
-                          type="button"
-                          key={item.id}
-                          onClick={() => runQuickAction(item)}
-                          onMouseEnter={() => setSelectedIndex(idx)}
-                          className="w-full px-3 py-2.5 rounded-md text-left text-[13px] text-inherit transition-colors duration-150"
-                          style={{ backgroundColor: idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}
-                        >
-                          {item.label}
-                        </button>
+                        <React.Fragment key={item.id}>
+                          {item.recent && !QUICK_JUMP_ACTIONS[idx - 1]?.recent && (
+                            <div className="px-3 pt-2 pb-1 text-xs opacity-60">最近续写</div>
+                          )}
+                          <button
+                            type="button"
+                            aria-expanded={item.id === 'dates' ? datesExpanded : undefined}
+                            onClick={() => runQuickAction(item)}
+                            onMouseEnter={() => { setSelectedIndex(idx); setShowQuickSelection(true); }}
+                            className={`flex w-full shrink-0 items-center justify-between gap-2 rounded-md px-3 py-2.5 text-left text-[13px] text-inherit transition-colors duration-150 ${!item.recent && QUICK_JUMP_ACTIONS[idx - 1]?.recent ? 'mt-2' : ''} ${item.dateOption ? 'pl-6' : ''}`}
+                            style={{ backgroundColor: showQuickSelection && idx === selectedIndex ? 'color-mix(in srgb, var(--theme-text) 5%, transparent)' : 'transparent' }}
+                          >
+                            <span className="truncate">{item.label}</span>
+                            {item.id === 'dates' && (
+                              <ChevronRight size={14} aria-hidden="true" className={`shrink-0 opacity-60 ${datesExpanded ? 'rotate-90' : ''}`} />
+                            )}
+                          </button>
+                        </React.Fragment>
                       ))}
                     </div>
                   </div>

@@ -129,7 +129,7 @@ export function MarkdownEditor({
           serialize(state: any, node: any) {
             // A standalone wiki link must also be readable by the on-disk backlink index.
             const only = node.childCount === 1 ? node.firstChild : null;
-            if (only?.isText && only.marks.length === 0 && /^\[\[[\p{L}\p{N}. -]+(?:\|[\p{L}\p{N} -]+)?\]\]$/u.test(only.text)) {
+            if (only?.isText && only.marks.length === 0 && /^\[\[[\p{L}\p{N}. -]+(?:\|[^\[\]|<>\\*`_~\r\n]+)?\]\]$/u.test(only.text)) {
               state.write(only.text);
               state.closeBlock(node);
             } else if (node.childCount === 0) {

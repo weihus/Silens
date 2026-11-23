@@ -35,7 +35,7 @@ describe('CommandPalette', () => {
     render(<CommandPalette open={true} onOpenChange={vi.fn()} editor={null} currentFilename={null} />);
 
     await waitFor(() => {
-      const input = screen.getByPlaceholderText('搜索笔记与灵感...');
+      const input = screen.getByPlaceholderText('搜索笔记');
       expect(input).toBeInTheDocument();
     });
   });

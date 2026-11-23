@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { documentKind, parseDocument, serializeDocument } from './documents';
+import { documentKind, firstSentence, parseDocument, serializeDocument } from './documents';
 
 describe('document boundaries', () => {
   it('keeps dated legacy files as journals regardless of headings', () => {
@@ -27,4 +27,11 @@ describe('document boundaries', () => {
     }
     expect(serializeDocument('journal', '', '# 日常\n\n内容')).toBe('# 日常\n\n内容');
   });
+});
+
+it('uses the first readable sentence and limits long excerpts by code point', () => {
+  expect(firstSentence('\n**一个想法**。继续展开。')).toBe('一个想法。');
+  expect(firstSentence('hello world. Next line')).toBe('hello world.');
+  expect(firstSentence('🌱'.repeat(33))).toBe('🌱'.repeat(32) + '…');
+  expect(firstSentence('  ')).toBe('');
 });
