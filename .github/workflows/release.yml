@@ -80,10 +80,49 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev libglib2.0-dev pkg-config
 
       - name: Build signed installers and update artifacts
-        run: npx tauri build --ci
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            for key in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              if [[ -z "${!key}" ]]; then
+                echo "::error::Missing GitHub Actions secret: $key"
+                exit 1
+              fi
+            done
+          fi
+          npx tauri build --ci
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+
+      - name: Verify macOS release artifacts
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/release/bundle
+          images=("$bundle"/dmg/*.dmg)
+          archives=("$bundle"/macos/*.app.tar.gz)
+          [[ "${#images[@]}" == 1 && -f "${images[0]}" ]]
+          [[ "${#archives[@]}" == 1 && -f "${archives[0]}" ]]
+          work=$(mktemp -d)
+          mkdir -p "$work/dmg" "$work/updater"
+          trap 'hdiutil detach "$work/dmg" >/dev/null 2>&1 || true' EXIT
+          hdiutil verify "${images[0]}"
+          hdiutil attach -readonly -nobrowse -mountpoint "$work/dmg" "${images[0]}"
+          tar -xzf "${archives[0]}" -C "$work/updater"
+          for app in "$work/dmg/Silens.app" "$work/updater/Silens.app"; do
+            codesign --verify --deep --strict -R='anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "$app"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+          done
 
       - name: Collect artifacts
         shell: bash
