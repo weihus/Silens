@@ -88,7 +88,7 @@ export function Canvas({ theme, uiVisible, onTyping, onMouseMove, onChange, onEd
     >
       <div className="canvas-writing-area" inert={disabled || suspended}>
         <div className="h-24" />
-        <div data-note-content>
+        <div data-note-content data-writing-theme={theme}>
         {article && (
           <div className="article-title-area">
             <textarea

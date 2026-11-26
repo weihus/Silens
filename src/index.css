@@ -125,6 +125,24 @@
 .canvas-writing-area > * {
   min-width: 0;
 }
+[data-note-content] {
+  --writing-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --writing-ink: #3d453e;
+  --writing-size: 16.5px;
+  --writing-leading: 1.62;
+  --writing-tracking: 0.008em;
+}
+[data-writing-theme="white"] {
+  --writing-ink: #303733;
+  --writing-size: 16px;
+  --writing-leading: 1.58;
+  --writing-tracking: normal;
+}
+[data-writing-theme="night"] {
+  --writing-ink: #cbd4cc;
+  --writing-leading: 1.65;
+  --writing-tracking: 0.014em;
+}
 .article-title-area {
   max-width: 620px;
   margin: 24px auto 36px;
@@ -140,20 +158,27 @@
   padding: 0;
   margin: 0;
   background: transparent;
-  color: var(--theme-text);
+  color: var(--writing-ink, var(--theme-text));
   font: inherit;
-  font-size: clamp(25px, 4vw, 32px);
+  font-family: var(--writing-font, system-ui);
+  font-size: clamp(24px, 4vw, 30px);
   font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0.015em;
+  line-height: 1.35;
+  letter-spacing: normal;
   overflow-wrap: anywhere;
 }
 .article-title::placeholder { color: var(--theme-muted); opacity: 0.5; }
 .article-title:focus-visible { outline: none; }
 .ProseMirror:focus { outline: none; }
-.ProseMirror { font-size: 19px; }
-.ProseMirror p { margin: 0 0 1.1em; }
-.ProseMirror p:last-child { margin-bottom: 0; }
+[data-note-body] {
+  font-family: var(--writing-font, system-ui);
+  font-size: var(--writing-size, 16.5px);
+  line-height: var(--writing-leading, 1.62);
+  letter-spacing: var(--writing-tracking, 0.008em);
+  color: var(--writing-ink, var(--theme-text));
+}
+[data-note-body] > p { margin: 0 0 0.3em; }
+[data-note-body] > p:last-child { margin-bottom: 0; }
 .timeline-sidebar-open {
   width: min(320px, 100vw);
 }

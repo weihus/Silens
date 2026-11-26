@@ -181,8 +181,7 @@ export function MarkdownEditor({
         'aria-label': '笔记正文',
         'data-note-body': '',
         'aria-multiline': 'true',
-        // Typography System: 纯粹的系统无衬线、固定 19px、1.9 行高、0 段距、禁用标题干扰
-        class: `prose ${theme === 'night' ? 'prose-invert' : 'prose-slate'} max-w-none focus:outline-none text-[17px] leading-[1.9] tracking-[0.03em] prose-p:my-0 prose-a:no-underline prose-strong:font-semibold min-h-[50vh]`,
+        class: `prose ${theme === 'night' ? 'prose-invert' : 'prose-slate'} max-w-none focus:outline-none prose-p:my-0 prose-a:no-underline prose-strong:font-semibold min-h-[50vh]`,
       },
     },
     onUpdate: ({ editor }) => {
@@ -715,25 +714,10 @@ export function MarkdownEditor({
           height: 0;
         }
         /* 仅保留最基础富文本元素的色彩继承 */
-        .prose p, .prose strong, .prose em, .prose ol, .prose ul, .prose li {
-          color: var(--theme-text) !important;
+        [data-note-body] :is(p, strong, em, ol, ul, li) {
+          color: var(--writing-ink, var(--theme-text));
         }
         
-        /* 独裁排版：强制 1.9 行高 + 微弱字距，为中文方块字留呼吸 */
-        .prose .tiptap,
-        .tiptap p,
-        .prose p {
-          line-height: 1.9 !important;
-          letter-spacing: 0.03em;
-        }
-        /* 双回车物理留白：区块间 48~64px 呼吸空隙，段落 0 段距由 block margin 承担 */
-        .prose .tiptap p {
-          margin-bottom: 48px;
-        }
-        .prose .tiptap p:last-child {
-          margin-bottom: 0;
-        }
-
         /* 主题切换的平滑色彩过渡 */
         .prose, .prose * {
           transition: color 0.5s ease-in-out, background-color 0.5s ease-in-out, border-color 0.5s ease-in-out;
